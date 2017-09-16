@@ -10,9 +10,8 @@ is inspired by the dicussion in
 ## How it works
 
 The controller simply gets all Pod Disruption Budgets for each namespace and
-compares them to Deployments and StatefulSets. For any deployment of
-StatefulSet with more than 1 replica and no matching Pod Disruption Budget, a
-default PDB will be created:
+compares them to Deployments and StatefulSets. For any resource with more than
+1 replica and no matching Pod Disruption Budget, a default PDB will be created:
 
 ```yaml
 apiVersion: policy/v1beta1
@@ -31,7 +30,7 @@ spec:
       application: my-app
 ```
 
-The labels and selector are based on those from the related Deployment or
+The selector and labels are based on those from the related Deployment or
 StatefulSet. The special `heritage=pdb-controller` label is set by the
 controller and is used to find owned PDBs. Owned PDBs are removed in case
 replicas of the related resource is scaled to 1 or less. This

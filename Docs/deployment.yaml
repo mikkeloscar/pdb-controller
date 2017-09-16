@@ -1,0 +1,28 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: pdb-controller
+  namespace: kube-system
+  labels:
+    application: pdb-controller
+    version: latest
+spec:
+  selector:
+    matchLabels:
+      application: pdb-controller
+  template:
+    metadata:
+      labels:
+        application: pdb-controller
+        version: latest
+    spec:
+      containers:
+      - name: pdb-controller
+        image: mikkeloscar/pdb-controller:latest
+        resources:
+          limits:
+            cpu: 200m
+            memory: 200Mi
+          requests:
+            cpu: 10m
+            memory: 25Mi

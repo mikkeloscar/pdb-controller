@@ -70,6 +70,7 @@ func (n *PDBController) runOnce() error {
 // channel.
 func (n *PDBController) Run(stopChan <-chan struct{}) {
 	for {
+		log.Debug("Running main control loop.")
 		err := n.runOnce()
 		if err != nil {
 			log.Error(err)

@@ -15,19 +15,20 @@ const (
 	defaultInterval = "1m"
 )
 
-var (
-	config struct {
-		Interval time.Duration
-	}
-)
-
-func init() {
-	kingpin.Flag("interval", "Interval between creating PDBs.").
-		Default(defaultInterval).DurationVar(&config.Interval)
+type config struct {
+	Interval time.Duration
+	Debug    bool
 }
 
 func main() {
+	config := config{}
+	kingpin.Flag("interval", "Interval between creating PDBs.").Default(defaultInterval).DurationVar(&config.Interval)
+	kingpin.Flag("debug", "Enable debug logging.").BoolVar(&config.Debug)
 	kingpin.Parse()
+
+	if config.Debug {
+		log.SetLevel(log.DebugLevel)
+	}
 
 	controller, err := NewPDBController(config.Interval)
 	if err != nil {

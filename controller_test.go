@@ -194,7 +194,7 @@ func TestAddPDBs(t *testing.T) {
 	}
 }
 
-func TestGetPDB(t *testing.T) {
+func TestGetPDBs(t *testing.T) {
 	labels := map[string]string{"k": "v"}
 	pdbs := []pv1beta1.PodDisruptionBudget{
 		{
@@ -209,18 +209,18 @@ func TestGetPDB(t *testing.T) {
 		},
 	}
 
-	pdb := getPDB(labels, pdbs, nil)
-	if pdb == nil {
+	matchedPDBs := getPDBs(labels, pdbs, nil)
+	if len(matchedPDBs) == 0 {
 		t.Errorf("expected to get matching PDB")
 	}
 
-	pdb = getPDB(labels, pdbs, labels)
-	if pdb == nil {
+	matchedPDBs = getPDBs(labels, pdbs, labels)
+	if len(matchedPDBs) == 0 {
 		t.Errorf("expected to get matching PDB")
 	}
 
-	pdb = getPDB(nil, pdbs, labels)
-	if pdb != nil {
+	matchedPDBs = getPDBs(nil, pdbs, labels)
+	if len(matchedPDBs) != 0 {
 		t.Errorf("did not expect to find matching PDB")
 	}
 }
@@ -245,4 +245,54 @@ func TestContainLabels(t *testing.T) {
 	if containLabels(labels, notExpected) {
 		t.Errorf("did not expect %s to be contained in %s", notExpected, labels)
 	}
+}
+
+func TestLabelsIntersect(tt *testing.T) {
+	for _, tc := range []struct {
+		msg       string
+		a         map[string]string
+		b         map[string]string
+		intersect bool
+	}{
+		{
+			msg: "matching maps should intersect",
+			a: map[string]string{
+				"foo": "bar",
+			},
+			b: map[string]string{
+				"foo": "bar",
+			},
+			intersect: true,
+		},
+		{
+			msg: "partly matching maps should intersect",
+			a: map[string]string{
+				"foo": "bar",
+			},
+			b: map[string]string{
+				"foo": "bar",
+				"bar": "foo",
+			},
+			intersect: true,
+		},
+		{
+			msg: "maps with matching keys but different values should not inersect",
+			a: map[string]string{
+				"foo": "bar",
+				"bar": "baz",
+			},
+			b: map[string]string{
+				"foo": "bar",
+				"bar": "foo",
+			},
+			intersect: false,
+		},
+	} {
+		tt.Run(tc.msg, func(t *testing.T) {
+			if labelsIntersect(tc.a, tc.b) != tc.intersect {
+				t.Errorf("expected intersection to be %t, was %t", tc.intersect, labelsIntersect(tc.a, tc.b))
+			}
+		})
+	}
+
 }

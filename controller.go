@@ -105,27 +105,53 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 	}
 
 	addPDB := make([]interface{}, 0, len(deployments.Items)+len(statefulSets.Items))
-	removePDB := make([]*pv1beta1.PodDisruptionBudget, 0, len(deployments.Items)+len(statefulSets.Items))
+	removePDB := make([]pv1beta1.PodDisruptionBudget, 0, len(deployments.Items)+len(statefulSets.Items))
 
 	for _, deployment := range deployments.Items {
-		if pdb := getPDB(deployment.Spec.Template.Labels, pdbs.Items, nil); pdb == nil && *deployment.Spec.Replicas > 1 {
+		matchedPDBs := getPDBs(deployment.Spec.Template.Labels, pdbs.Items, nil)
+
+		// if no PDB exist for the deployment, add one
+		if len(matchedPDBs) == 0 && *deployment.Spec.Replicas > 1 {
 			addPDB = append(addPDB, deployment)
 		}
+
 		// for resources with only one replica, check if we previously
-		// created a pdb and remove it.
-		if pdb := getPDB(deployment.Spec.Template.Labels, pdbs.Items, ownerLabels); pdb != nil && *deployment.Spec.Replicas <= 1 {
-			removePDB = append(removePDB, pdb)
+		// created PDBs and remove them.
+		ownedPDBs := getPDBs(deployment.Spec.Template.Labels, matchedPDBs, ownerLabels)
+
+		if len(ownedPDBs) > 0 && *deployment.Spec.Replicas <= 1 {
+			removePDB = append(removePDB, ownedPDBs...)
+			continue
+		}
+
+		// if there are owned PDBs and a non-owned PDBs remove the
+		// owned PDBs to not shadow what's defined by users.
+		if len(ownedPDBs) != len(matchedPDBs) {
+			removePDB = append(removePDB, ownedPDBs...)
 		}
 	}
 
 	for _, statefulSet := range statefulSets.Items {
-		if pdb := getPDB(statefulSet.Spec.Template.Labels, pdbs.Items, nil); pdb == nil && *statefulSet.Spec.Replicas > 1 {
+		matchedPDBs := getPDBs(statefulSet.Spec.Template.Labels, pdbs.Items, nil)
+
+		// if no PDB exist for the statefulset, add one
+		if len(matchedPDBs) == 0 && *statefulSet.Spec.Replicas > 1 {
 			addPDB = append(addPDB, statefulSet)
 		}
-		// for resources with only one or less replicas, check if we
-		// previously created a PDB, and remove it.
-		if pdb := getPDB(statefulSet.Spec.Template.Labels, pdbs.Items, ownerLabels); pdb != nil && *statefulSet.Spec.Replicas <= 1 {
-			removePDB = append(removePDB, pdb)
+
+		// for resources with only one replica, check if we previously
+		// created PDBs and remove them.
+		ownedPDBs := getPDBs(statefulSet.Spec.Template.Labels, matchedPDBs, ownerLabels)
+
+		if len(ownedPDBs) > 0 && *statefulSet.Spec.Replicas <= 1 {
+			removePDB = append(removePDB, ownedPDBs...)
+			continue
+		}
+
+		// if there are owned PDBs and a non-owned PDBs remove the
+		// owned PDBs to not shadow what's defined by users.
+		if len(ownedPDBs) != len(matchedPDBs) {
+			removePDB = append(removePDB, ownedPDBs...)
 		}
 	}
 
@@ -188,14 +214,15 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 	return nil
 }
 
-// getPDB gets matching PodDisruptionBudget.
-func getPDB(labels map[string]string, pdbs []pv1beta1.PodDisruptionBudget, selector map[string]string) *pv1beta1.PodDisruptionBudget {
+// getPDBs gets matching PodDisruptionBudgets.
+func getPDBs(labels map[string]string, pdbs []pv1beta1.PodDisruptionBudget, selector map[string]string) []pv1beta1.PodDisruptionBudget {
+	matchedPDBs := make([]pv1beta1.PodDisruptionBudget, 0)
 	for _, pdb := range pdbs {
-		if containLabels(labels, pdb.Spec.Selector.MatchLabels) && containLabels(pdb.Labels, selector) {
-			return &pdb
+		if labelsIntersect(labels, pdb.Spec.Selector.MatchLabels) && containLabels(pdb.Labels, selector) {
+			matchedPDBs = append(matchedPDBs, pdb)
 		}
 	}
-	return nil
+	return matchedPDBs
 }
 
 // containLabels reports whether expectedLabels are in labels.
@@ -206,4 +233,23 @@ func containLabels(labels, expectedLabels map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// labelsIntersect checks whether two maps a and b intersects. Intersection is
+// defined as at least one identical key value pair must exist in both maps and
+// there must be no keys which match where the values doesn't match.
+func labelsIntersect(a, b map[string]string) bool {
+	intersect := false
+	for key, val := range a {
+		v, ok := b[key]
+		if ok {
+			if v == val {
+				intersect = true
+			} else { // if the key exists but the values doesn't match, don't consider it an intersection
+				return false
+			}
+		}
+	}
+
+	return intersect
 }

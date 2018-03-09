@@ -12,25 +12,28 @@ import (
 )
 
 const (
-	defaultInterval = "1m"
+	defaultInterval      = "1m"
+	defaultPDBNameSuffix = "pdb-controller"
 )
 
 type config struct {
-	Interval time.Duration
-	Debug    bool
+	Interval      time.Duration
+	Debug         bool
+	PDBNameSuffix string
 }
 
 func main() {
 	config := config{}
 	kingpin.Flag("interval", "Interval between creating PDBs.").Default(defaultInterval).DurationVar(&config.Interval)
 	kingpin.Flag("debug", "Enable debug logging.").BoolVar(&config.Debug)
+	kingpin.Flag("pdb-name-suffix", "Specify default PDB name suffix.").Default(defaultPDBNameSuffix).StringVar(&config.PDBNameSuffix)
 	kingpin.Parse()
 
 	if config.Debug {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	controller, err := NewPDBController(config.Interval)
+	controller, err := NewPDBController(config.Interval, config.PDBNameSuffix)
 	if err != nil {
 		log.Fatal(err)
 	}

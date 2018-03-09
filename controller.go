@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -26,11 +27,12 @@ var (
 // if missing.
 type PDBController struct {
 	kubernetes.Interface
-	interval time.Duration
+	interval      time.Duration
+	pdbNameSuffix string
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration) (*PDBController, error) {
+func NewPDBController(interval time.Duration, pdbNameSuffix string) (*PDBController, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -42,8 +44,9 @@ func NewPDBController(interval time.Duration) (*PDBController, error) {
 	}
 
 	controller := &PDBController{
-		Interface: client,
-		interval:  interval,
+		Interface:     client,
+		interval:      interval,
+		pdbNameSuffix: pdbNameSuffix,
 	}
 
 	return controller, nil
@@ -179,6 +182,10 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			pdb.Namespace = r.Namespace
 			pdb.Labels = labels
 			pdb.Spec.Selector = r.Spec.Selector
+		}
+
+		if n.pdbNameSuffix != "" {
+			pdb.Name = fmt.Sprintf("%s-%s", pdb.Name, n.pdbNameSuffix)
 		}
 
 		_, err := n.PolicyV1beta1().PodDisruptionBudgets(pdb.Namespace).Create(pdb)

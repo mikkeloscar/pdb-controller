@@ -169,6 +169,9 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 
 		switch r := resource.(type) {
 		case v1beta1.Deployment:
+			if r.Labels == nil {
+				r.Labels = make(map[string]string)
+			}
 			labels := r.Labels
 			labels[heritageLabel] = pdbController
 			pdb.Name = r.Name
@@ -176,6 +179,9 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			pdb.Labels = labels
 			pdb.Spec.Selector = r.Spec.Selector
 		case v1beta1.StatefulSet:
+			if r.Labels == nil {
+				r.Labels = make(map[string]string)
+			}
 			labels := r.Labels
 			labels[heritageLabel] = pdbController
 			pdb.Name = r.Name

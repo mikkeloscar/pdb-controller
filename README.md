@@ -5,7 +5,8 @@
 This is a simple Kubernetes controller for adding default [Pod Disruption
 Budgets (PDBs)][pdb] for Deployments and StatefulSets in case none are defined. This
 is inspired by the dicussion in
-[kubernetes/kubernetes#35318](https://github.com/kubernetes/kubernetes/issues/35318).
+[kubernetes/kubernetes#35318](https://github.com/kubernetes/kubernetes/issues/35318)
+and was created for lack of an alternative.
 
 ## How it works
 
@@ -37,10 +38,30 @@ replicas of the related resource is scaled to 1 or less. This
 is done to prevent deadlocking for clients depending on the PDBs e.g. cluster
 upgrade tools.
 
+## Building
+
+To build this project you need to have [Go](https://golang.org/dl/) installed
+and checkout the repository into your `$GOPATH`.
+
+```bash
+$ git clone https://github.com/mikkeloscar/pdb-controller.git $GOPATH/src/github.com/mikkeloscar/pdb-controller
+```
+
+[Dep](https://github.com/golang/dep) is used for vendoring dependencies. They
+are not checked into the repository so you need to fetch then before building.
+
+```bash
+$ go get -u github.com/golang/dep/cmd/dep
+$ cd $GOPATH/src/github.com/mikkeloscar/pdb-controller
+$ dep ensure -vendor-only -v
+```
+
+Once dependencies are fetch you can build the binary simply by running `make`.
+
 ## Setup
 
 The `pdb-controller` can be run as a deployment in the cluster. See
-[deployment.yaml](/Docs/deployment.yaml).
+[deployment.yaml](/Docs/deployment.yaml) for an example.
 
 Deploy it by running:
 
@@ -51,5 +72,9 @@ $ kubectl apply -f Docs/deployment.yaml
 ## TODO
 
 * [ ] Instead of long polling, add a Watch feature.
+
+## LICENSE
+
+See [LICENSE](LICENSE) file.
 
 [pdb]: https://kubernetes.io/docs/tasks/run-application/configure-pdb/

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"gopkg.in/alecthomas/kingpin.v2"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -18,6 +21,7 @@ const (
 
 type config struct {
 	Interval      time.Duration
+	APIServer     *url.URL
 	Debug         bool
 	PDBNameSuffix string
 }
@@ -25,6 +29,7 @@ type config struct {
 func main() {
 	config := config{}
 	kingpin.Flag("interval", "Interval between creating PDBs.").Default(defaultInterval).DurationVar(&config.Interval)
+	kingpin.Flag("apiserver", "API server url.").URLVar(&config.APIServer)
 	kingpin.Flag("debug", "Enable debug logging.").BoolVar(&config.Debug)
 	kingpin.Flag("pdb-name-suffix", "Specify default PDB name suffix.").Default(defaultPDBNameSuffix).StringVar(&config.PDBNameSuffix)
 	kingpin.Parse()
@@ -33,7 +38,26 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	controller, err := NewPDBController(config.Interval, config.PDBNameSuffix)
+	var err error
+	var kubeConfig *rest.Config
+
+	if config.APIServer != nil {
+		kubeConfig = &rest.Config{
+			Host: config.APIServer.String(),
+		}
+	} else {
+		kubeConfig, err = rest.InClusterConfig()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	client, err := kubernetes.NewForConfig(kubeConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	controller, err := NewPDBController(config.Interval, client, config.PDBNameSuffix)
 	if err != nil {
 		log.Fatal(err)
 	}

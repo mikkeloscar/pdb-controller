@@ -11,7 +11,6 @@ import (
 	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/pkg/apis/apps/v1beta1"
 	pv1beta1 "k8s.io/client-go/pkg/apis/policy/v1beta1"
-	"k8s.io/client-go/rest"
 )
 
 const (
@@ -32,17 +31,7 @@ type PDBController struct {
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration, pdbNameSuffix string) (*PDBController, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	client, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-
+func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string) (*PDBController, error) {
 	controller := &PDBController{
 		Interface:     client,
 		interval:      interval,
@@ -176,6 +165,14 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			labels[heritageLabel] = pdbController
 			pdb.Name = r.Name
 			pdb.Namespace = r.Namespace
+			pdb.OwnerReferences = []metav1.OwnerReference{
+				{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+					Name:       r.Name,
+					UID:        r.UID,
+				},
+			}
 			pdb.Labels = labels
 			pdb.Spec.Selector = r.Spec.Selector
 		case v1beta1.StatefulSet:
@@ -186,6 +183,14 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			labels[heritageLabel] = pdbController
 			pdb.Name = r.Name
 			pdb.Namespace = r.Namespace
+			pdb.OwnerReferences = []metav1.OwnerReference{
+				{
+					APIVersion: "apps/v1",
+					Kind:       "StatefulSet",
+					Name:       r.Name,
+					UID:        r.UID,
+				},
+			}
 			pdb.Labels = labels
 			pdb.Spec.Selector = r.Spec.Selector
 		}

@@ -32,10 +32,13 @@ type PDBController struct {
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration, pdbNameSuffix string) (*PDBController, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, err
+func NewPDBController(interval time.Duration, config *rest.Config, pdbNameSuffix string) (*PDBController, error) {
+	var err error
+	if config == nil {
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	client, err := kubernetes.NewForConfig(config)

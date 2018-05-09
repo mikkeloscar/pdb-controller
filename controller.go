@@ -179,6 +179,14 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			labels[heritageLabel] = pdbController
 			pdb.Name = r.Name
 			pdb.Namespace = r.Namespace
+			pdb.OwnerReferences = []metav1.OwnerReference{
+				{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+					Name:       r.Name,
+					UID:        r.UID,
+				},
+			}
 			pdb.Labels = labels
 			pdb.Spec.Selector = r.Spec.Selector
 		case v1beta1.StatefulSet:
@@ -189,6 +197,14 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			labels[heritageLabel] = pdbController
 			pdb.Name = r.Name
 			pdb.Namespace = r.Namespace
+			pdb.OwnerReferences = []metav1.OwnerReference{
+				{
+					APIVersion: "apps/v1",
+					Kind:       "StatefulSet",
+					Name:       r.Name,
+					UID:        r.UID,
+				},
+			}
 			pdb.Labels = labels
 			pdb.Spec.Selector = r.Spec.Selector
 		}

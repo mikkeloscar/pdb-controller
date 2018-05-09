@@ -11,7 +11,6 @@ import (
 	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/pkg/apis/apps/v1beta1"
 	pv1beta1 "k8s.io/client-go/pkg/apis/policy/v1beta1"
-	"k8s.io/client-go/rest"
 )
 
 const (
@@ -32,20 +31,7 @@ type PDBController struct {
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration, config *rest.Config, pdbNameSuffix string) (*PDBController, error) {
-	var err error
-	if config == nil {
-		config, err = rest.InClusterConfig()
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	client, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-
+func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string) (*PDBController, error) {
 	controller := &PDBController{
 		Interface:     client,
 		interval:      interval,

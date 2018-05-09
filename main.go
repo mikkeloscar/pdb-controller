@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gopkg.in/alecthomas/kingpin.v2"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	log "github.com/sirupsen/logrus"
@@ -37,15 +38,26 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	}
 
+	var err error
 	var kubeConfig *rest.Config
 
 	if config.APIServer != nil {
 		kubeConfig = &rest.Config{
 			Host: config.APIServer.String(),
 		}
+	} else {
+		kubeConfig, err = rest.InClusterConfig()
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
-	controller, err := NewPDBController(config.Interval, kubeConfig, config.PDBNameSuffix)
+	client, err := kubernetes.NewForConfig(kubeConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	controller, err := NewPDBController(config.Interval, client, config.PDBNameSuffix)
 	if err != nil {
 		log.Fatal(err)
 	}

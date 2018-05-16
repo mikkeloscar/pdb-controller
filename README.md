@@ -38,6 +38,11 @@ replicas of the related resource is scaled to 1 or less. This
 is done to prevent deadlocking for clients depending on the PDBs e.g. cluster
 upgrade tools.
 
+Additionally you can run the controller with the flag `--non-ready-ttl=15m`
+which means it will remove owned PDBs in case the pods of a targeted deployment
+or statefulset are non-ready for more than the specified ttl. This is another
+way to ensure broken deployments doesn't block cluster operations.
+
 ## Building
 
 To build this project you need to have [Go](https://golang.org/dl/) installed

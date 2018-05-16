@@ -17,6 +17,7 @@ import (
 const (
 	defaultInterval      = "1m"
 	defaultPDBNameSuffix = "pdb-controller"
+	defaultNonReadyTTL   = "0s"
 )
 
 type config struct {
@@ -24,6 +25,7 @@ type config struct {
 	APIServer     *url.URL
 	Debug         bool
 	PDBNameSuffix string
+	NonReadyTTL   time.Duration
 }
 
 func main() {
@@ -32,6 +34,7 @@ func main() {
 	kingpin.Flag("apiserver", "API server url.").URLVar(&config.APIServer)
 	kingpin.Flag("debug", "Enable debug logging.").BoolVar(&config.Debug)
 	kingpin.Flag("pdb-name-suffix", "Specify default PDB name suffix.").Default(defaultPDBNameSuffix).StringVar(&config.PDBNameSuffix)
+	kingpin.Flag("non-ready-ttl", "Set the ttl for when to remove the managed PDB if the deployment/statefulset is unhealthy (default: disabled).").Default(defaultNonReadyTTL).DurationVar(&config.NonReadyTTL)
 	kingpin.Parse()
 
 	if config.Debug {
@@ -57,7 +60,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	controller, err := NewPDBController(config.Interval, client, config.PDBNameSuffix)
+	controller, err := NewPDBController(config.Interval, client, config.PDBNameSuffix, config.NonReadyTTL)
 	if err != nil {
 		log.Fatal(err)
 	}

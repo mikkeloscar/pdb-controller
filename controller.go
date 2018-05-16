@@ -6,6 +6,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/api/v1"
@@ -28,14 +29,16 @@ type PDBController struct {
 	kubernetes.Interface
 	interval      time.Duration
 	pdbNameSuffix string
+	nonReadyTTL   time.Duration
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string) (*PDBController, error) {
+func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration) (*PDBController, error) {
 	controller := &PDBController{
 		Interface:     client,
 		interval:      interval,
 		pdbNameSuffix: pdbNameSuffix,
+		nonReadyTTL:   nonReadyTTL,
 	}
 
 	return controller, nil
@@ -99,12 +102,17 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 	addPDB := make([]interface{}, 0, len(deployments.Items)+len(statefulSets.Items))
 	removePDB := make([]pv1beta1.PodDisruptionBudget, 0, len(deployments.Items)+len(statefulSets.Items))
 
+	nonReadTTL := time.Now().UTC().Add(-n.nonReadyTTL)
+
 	for _, deployment := range deployments.Items {
 		matchedPDBs := getPDBs(deployment.Spec.Template.Labels, pdbs.Items, nil)
 
-		// if no PDB exist for the deployment, add one
-		if len(matchedPDBs) == 0 && *deployment.Spec.Replicas > 1 {
-			addPDB = append(addPDB, deployment)
+		// if no PDB exist for the deployment and all replicas are
+		// ready, add one
+		if deployment.Status.ReadyReplicas == *deployment.Spec.Replicas {
+			if len(matchedPDBs) == 0 && *deployment.Spec.Replicas > 1 {
+				addPDB = append(addPDB, deployment)
+			}
 		}
 
 		// for resources with only one replica, check if we previously
@@ -120,15 +128,41 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 		// owned PDBs to not shadow what's defined by users.
 		if len(ownedPDBs) != len(matchedPDBs) {
 			removePDB = append(removePDB, ownedPDBs...)
+			continue
+		}
+
+		// if nonReadyTTL is enabled and not all replicas of the
+		// deployment is ready then we check when the pods were last
+		// ready. This is done to ensure we don't keep PDBs for broken
+		// deployments which would block cluster operations for no
+		// reason (Disrupting a broken deployment doesn't matter).
+		if n.nonReadyTTL > 0 && len(ownedPDBs) > 0 && deployment.Status.ReadyReplicas < *deployment.Spec.Replicas {
+			lastTransitionTime, err := n.getPodsLastTransitionTime(namespace.Name, deployment.Spec.Selector.MatchLabels)
+			if err != nil {
+				log.Errorf("Failed to get pod lastTransitionTime: %s", err)
+				continue
+			}
+
+			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(nonReadTTL) {
+				removePDB = append(removePDB, ownedPDBs...)
+			}
 		}
 	}
 
 	for _, statefulSet := range statefulSets.Items {
+		// only add PDB for statefulsets where all replicas are ready
+		if statefulSet.Status.ReadyReplicas < statefulSet.Status.Replicas {
+			continue
+		}
+
 		matchedPDBs := getPDBs(statefulSet.Spec.Template.Labels, pdbs.Items, nil)
 
-		// if no PDB exist for the statefulset, add one
-		if len(matchedPDBs) == 0 && *statefulSet.Spec.Replicas > 1 {
-			addPDB = append(addPDB, statefulSet)
+		// if no PDB exist for the statefulset and all replicas are
+		// ready, add one
+		if statefulSet.Status.ReadyReplicas == *statefulSet.Spec.Replicas {
+			if len(matchedPDBs) == 0 && *statefulSet.Spec.Replicas > 1 {
+				addPDB = append(addPDB, statefulSet)
+			}
 		}
 
 		// for resources with only one replica, check if we previously
@@ -144,6 +178,23 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 		// owned PDBs to not shadow what's defined by users.
 		if len(ownedPDBs) != len(matchedPDBs) {
 			removePDB = append(removePDB, ownedPDBs...)
+		}
+
+		// if nonReadyTTL is enabled and not all replicas of the
+		// statefulset is ready then we check when the pods were last
+		// ready. This is done to ensure we don't keep PDBs for broken
+		// statefulsets which would block cluster operations for no
+		// reason (Disrupting a broken statefulset doesn't matter).
+		if n.nonReadyTTL > 0 && len(ownedPDBs) > 0 && statefulSet.Status.ReadyReplicas < *statefulSet.Spec.Replicas {
+			lastTransitionTime, err := n.getPodsLastTransitionTime(namespace.Name, statefulSet.Spec.Selector.MatchLabels)
+			if err != nil {
+				log.Errorf("Failed to get pod lastTransitionTime: %s", err)
+				continue
+			}
+
+			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(nonReadTTL) {
+				removePDB = append(removePDB, ownedPDBs...)
+			}
 		}
 	}
 
@@ -230,6 +281,39 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 	}
 
 	return nil
+}
+
+// getPodsLastTransitionTime returns the latest transition time for the pod not
+// ready condition of all pods matched by the selector.
+func (n *PDBController) getPodsLastTransitionTime(namespace string, selector map[string]string) (time.Time, error) {
+	opts := metav1.ListOptions{
+		LabelSelector: labels.Set(selector).String(),
+	}
+	pods, err := n.CoreV1().Pods(namespace).List(opts)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	lastTransitionTime := time.Time{}
+
+	for _, pod := range pods.Items {
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type != v1.PodReady {
+				continue
+			}
+
+			if cond.Status == v1.ConditionTrue {
+				break
+			}
+
+			if cond.LastTransitionTime.After(lastTransitionTime) {
+				lastTransitionTime = cond.LastTransitionTime.Time
+			}
+			break
+		}
+	}
+
+	return lastTransitionTime, nil
 }
 
 // getPDBs gets matching PodDisruptionBudgets.

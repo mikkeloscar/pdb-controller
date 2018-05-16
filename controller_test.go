@@ -3,7 +3,9 @@ package main
 import (
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/pkg/api/v1"
@@ -80,6 +82,107 @@ func TestRun(t *testing.T) {
 
 	go controller.Run(stopCh)
 	stopCh <- struct{}{}
+}
+
+func TestRemoveInvalidPDBs(t *testing.T) {
+	deplabels := map[string]string{"foo": "deployment"}
+	sslabels := map[string]string{"foo": "statefulset"}
+	replicas := int32(2)
+
+	one := intstr.FromInt(1)
+	pdbs := []*pv1beta1.PodDisruptionBudget{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "pdb-1",
+				Labels: ownerLabels,
+			},
+			Spec: pv1beta1.PodDisruptionBudgetSpec{
+				Selector: &metav1.LabelSelector{
+					MatchLabels: deplabels,
+				},
+				MinAvailable: &one,
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "pdb-2",
+				Labels: ownerLabels,
+			},
+			Spec: pv1beta1.PodDisruptionBudgetSpec{
+				Selector: &metav1.LabelSelector{
+					MatchLabels: sslabels,
+				},
+				MinAvailable: &one,
+			},
+		},
+	}
+
+	deployments := []*v1beta1.Deployment{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "deployment-1",
+				Labels: deplabels,
+			},
+			Spec: v1beta1.DeploymentSpec{
+				Replicas: &replicas,
+				Selector: &metav1.LabelSelector{
+					MatchLabels: deplabels,
+				},
+				Template: v1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: deplabels,
+					},
+				},
+			},
+		},
+	}
+
+	statefulSets := []*v1beta1.StatefulSet{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "stateful-set-1",
+				Labels: sslabels,
+			},
+			Spec: v1beta1.StatefulSetSpec{
+				Replicas: &replicas,
+				Selector: &metav1.LabelSelector{
+					MatchLabels: sslabels,
+				},
+				Template: v1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: sslabels,
+					},
+				},
+			},
+		},
+	}
+
+	namespaces := []*v1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "default",
+			},
+		},
+	}
+
+	controller := &PDBController{
+		Interface: setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
+	}
+
+	err := controller.addPDBs(namespaces[0])
+	if err != nil {
+		t.Error(err)
+	}
+
+	for _, pdb := range []string{"pdb-1", "pdb-2"} {
+		pdbResource, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get(pdb, metav1.GetOptions{})
+		if err == nil {
+			t.Fatalf("unexpected pdb (%s) found: %v", pdb, pdbResource)
+		}
+		if !errors.IsNotFound(err) {
+			t.Fatalf("unexpected error: %s", err)
+		}
+	}
 }
 
 func TestAddPDBs(t *testing.T) {

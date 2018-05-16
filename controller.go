@@ -131,6 +131,13 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			continue
 		}
 
+		// remove PDBs that are no longer valid, they'll be recreated on the next iteration
+		for _, pdb := range ownedPDBs {
+			if !pdbSpecValid(pdb) {
+				removePDB = append(removePDB, pdb)
+			}
+		}
+
 		// if nonReadyTTL is enabled and not all replicas of the
 		// deployment is ready then we check when the pods were last
 		// ready. This is done to ensure we don't keep PDBs for broken
@@ -178,6 +185,14 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 		// owned PDBs to not shadow what's defined by users.
 		if len(ownedPDBs) != len(matchedPDBs) {
 			removePDB = append(removePDB, ownedPDBs...)
+			continue
+		}
+
+		// remove PDBs that are no longer valid, they'll be recreated on the next iteration
+		for _, pdb := range ownedPDBs {
+			if !pdbSpecValid(pdb) {
+				removePDB = append(removePDB, pdb)
+			}
 		}
 
 		// if nonReadyTTL is enabled and not all replicas of the
@@ -200,10 +215,10 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 
 	// add missing PDBs
 	for _, resource := range addPDB {
-		minAvailable := intstr.FromInt(1)
+		maxUnavailable := intstr.FromInt(1)
 		pdb := &pv1beta1.PodDisruptionBudget{
 			Spec: pv1beta1.PodDisruptionBudgetSpec{
-				MinAvailable: &minAvailable,
+				MaxUnavailable: &maxUnavailable,
 			},
 		}
 
@@ -314,6 +329,11 @@ func (n *PDBController) getPodsLastTransitionTime(namespace string, selector map
 	}
 
 	return lastTransitionTime, nil
+}
+
+// pdbSpecValid returns true if the PDB spec is up-to-date
+func pdbSpecValid(pdb pv1beta1.PodDisruptionBudget) bool {
+	return pdb.Spec.MinAvailable == nil
 }
 
 // getPDBs gets matching PodDisruptionBudgets.

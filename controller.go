@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	heritageLabel = "heritage"
-	pdbController = "pdb-controller"
+	heritageLabel             = "heritage"
+	pdbController             = "pdb-controller"
+	nonReadyTTLAnnotationName = "pdb-controller.zalando.org/non-ready-ttl"
 )
 
 var (
@@ -150,7 +151,11 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 				continue
 			}
 
-			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(nonReadTTL) {
+			ttl, err := overrideNonReadyTTL(deployment.Annotations, nonReadTTL)
+			if err != nil {
+				log.Errorf("Failed to override PDB Delete TTL: %s", err)
+			}
+			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(ttl) {
 				removePDB = append(removePDB, ownedPDBs...)
 			}
 		}
@@ -207,7 +212,12 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 				continue
 			}
 
-			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(nonReadTTL) {
+			ttl, err := overrideNonReadyTTL(statefulSet.Annotations, nonReadTTL)
+			if err != nil {
+				log.Errorf("Failed to override PDB Delete TTL: %s", err)
+			}
+
+			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(ttl) {
 				removePDB = append(removePDB, ownedPDBs...)
 			}
 		}
@@ -296,6 +306,17 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 	}
 
 	return nil
+}
+
+func overrideNonReadyTTL(annotations map[string]string, nonReadyTTL time.Time) (time.Time, error) {
+	if ttlVal, ok := annotations[nonReadyTTLAnnotationName]; ok {
+		duration, err := time.ParseDuration(ttlVal)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return time.Now().UTC().Add(-duration), nil
+	}
+	return nonReadyTTL, nil
 }
 
 // getPodsLastTransitionTime returns the latest transition time for the pod not

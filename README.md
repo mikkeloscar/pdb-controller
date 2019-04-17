@@ -43,6 +43,9 @@ which means it will remove owned PDBs in case the pods of a targeted deployment
 or statefulset are non-ready for more than the specified ttl. This is another
 way to ensure broken deployments doesn't block cluster operations.
 
+This global value can also be overriden by specifying the annotation
+`pdb-controller.zalando.org/non-ready-ttl` on a deployment or statefulset.
+
 ## Building
 
 To build this project you need to have [Go](https://golang.org/dl/) installed

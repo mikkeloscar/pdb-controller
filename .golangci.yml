@@ -1,0 +1,13 @@
+run:
+linters-settings:
+  golint:
+      min-confidence: 0.9
+
+linters:
+  disable-all: true
+  enable:
+    - staticcheck
+    - govet
+    - ineffassign
+    - golint
+    - goimports

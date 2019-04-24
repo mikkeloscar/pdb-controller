@@ -5,13 +5,13 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"k8s.io/api/apps/v1beta1"
+	v1 "k8s.io/api/core/v1"
+	pv1beta1 "k8s.io/api/policy/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/pkg/api/v1"
-	"k8s.io/client-go/pkg/apis/apps/v1beta1"
-	pv1beta1 "k8s.io/client-go/pkg/apis/policy/v1beta1"
 )
 
 const (
@@ -23,7 +23,7 @@ var (
 	ownerLabels = map[string]string{heritageLabel: pdbController}
 )
 
-// PDBController creates PodDistruptionBudgets for deployments and StatefulSets
+// PDBController creates PodDisruptionBudgets for deployments and StatefulSets
 // if missing.
 type PDBController struct {
 	kubernetes.Interface
@@ -89,12 +89,12 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 		return err
 	}
 
-	deployments, err := n.AppsV1beta1().Deployments(namespace.Name).List(metav1.ListOptions{})
+	deployments, err := n.AppsV1().Deployments(namespace.Name).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 
-	statefulSets, err := n.AppsV1beta1().StatefulSets(namespace.Name).List(metav1.ListOptions{})
+	statefulSets, err := n.AppsV1().StatefulSets(namespace.Name).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}

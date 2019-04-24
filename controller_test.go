@@ -3,17 +3,17 @@ package main
 import (
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	v1 "k8s.io/api/core/v1"
+	pv1beta1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/pkg/api/v1"
-	"k8s.io/client-go/pkg/apis/apps/v1beta1"
-	pv1beta1 "k8s.io/client-go/pkg/apis/policy/v1beta1"
 )
 
-func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, deployments []*v1beta1.Deployment, statefulSets []*v1beta1.StatefulSet, namespaces []*v1.Namespace) kubernetes.Interface {
+func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet, namespaces []*v1.Namespace) kubernetes.Interface {
 	client := fake.NewSimpleClientset()
 
 	for _, pdb := range pdbs {
@@ -24,14 +24,14 @@ func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, dep
 	}
 
 	for _, depl := range deployments {
-		_, err := client.AppsV1beta1().Deployments(namespaces[0].Name).Create(depl)
+		_, err := client.AppsV1().Deployments(namespaces[0].Name).Create(depl)
 		if err != nil {
 			t.Error(err)
 		}
 	}
 
 	for _, statefulSet := range statefulSets {
-		_, err := client.AppsV1beta1().StatefulSets(namespaces[0].Name).Create(statefulSet)
+		_, err := client.AppsV1().StatefulSets(namespaces[0].Name).Create(statefulSet)
 		if err != nil {
 			t.Error(err)
 		}
@@ -117,13 +117,13 @@ func TestRemoveInvalidPDBs(t *testing.T) {
 		},
 	}
 
-	deployments := []*v1beta1.Deployment{
+	deployments := []*appsv1.Deployment{
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:   "deployment-1",
 				Labels: deplabels,
 			},
-			Spec: v1beta1.DeploymentSpec{
+			Spec: appsv1.DeploymentSpec{
 				Replicas: &replicas,
 				Selector: &metav1.LabelSelector{
 					MatchLabels: deplabels,
@@ -137,13 +137,13 @@ func TestRemoveInvalidPDBs(t *testing.T) {
 		},
 	}
 
-	statefulSets := []*v1beta1.StatefulSet{
+	statefulSets := []*appsv1.StatefulSet{
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:   "stateful-set-1",
 				Labels: sslabels,
 			},
-			Spec: v1beta1.StatefulSetSpec{
+			Spec: appsv1.StatefulSetSpec{
 				Replicas: &replicas,
 				Selector: &metav1.LabelSelector{
 					MatchLabels: sslabels,
@@ -205,13 +205,13 @@ func TestAddPDBs(t *testing.T) {
 	noReplicas := int32(0)
 	replicas := int32(2)
 
-	deployments := []*v1beta1.Deployment{
+	deployments := []*appsv1.Deployment{
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:   "deployment-1",
 				Labels: labels,
 			},
-			Spec: v1beta1.DeploymentSpec{
+			Spec: appsv1.DeploymentSpec{
 				Replicas: &noReplicas,
 				Selector: &metav1.LabelSelector{
 					MatchLabels: labels,
@@ -228,7 +228,7 @@ func TestAddPDBs(t *testing.T) {
 				Name:   "deployment-2",
 				Labels: notFoundLabels,
 			},
-			Spec: v1beta1.DeploymentSpec{
+			Spec: appsv1.DeploymentSpec{
 				Replicas: &replicas,
 				Selector: &metav1.LabelSelector{
 					MatchLabels: notFoundLabels,
@@ -242,13 +242,13 @@ func TestAddPDBs(t *testing.T) {
 		},
 	}
 
-	statefulSets := []*v1beta1.StatefulSet{
+	statefulSets := []*appsv1.StatefulSet{
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:   "stateful-set-1",
 				Labels: labels,
 			},
-			Spec: v1beta1.StatefulSetSpec{
+			Spec: appsv1.StatefulSetSpec{
 				Replicas: &noReplicas,
 				Selector: &metav1.LabelSelector{
 					MatchLabels: labels,
@@ -265,7 +265,7 @@ func TestAddPDBs(t *testing.T) {
 				Name:   "stateful-set-2",
 				Labels: labels,
 			},
-			Spec: v1beta1.StatefulSetSpec{
+			Spec: appsv1.StatefulSetSpec{
 				Replicas: &replicas,
 				Selector: &metav1.LabelSelector{
 					MatchLabels: notFoundLabels,

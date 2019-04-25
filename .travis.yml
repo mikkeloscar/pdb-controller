@@ -4,6 +4,14 @@ sudo: false
 
 language: go
 
+addons:
+  apt:
+    packages:
+    # needed for the nfpm pipe:
+    - rpm
+    # needed for the snap pipe:
+    - snapd
+
 branches:
   only:
     - master
@@ -17,15 +25,29 @@ notifications:
   email: false
 
 env:
+  # needed for the snap pipe:
+  - PATH=/snap/bin:$PATH
+  # enforcing go mod in GOPATH
   - GO111MODULE=on
 
 services:
   - docker
 
 before_script:
+  # needed for the snap pipe:
+  - sudo snap install snapcraft --classic
   - go install github.com/golangci/golangci-lint/cmd/golangci-lint
   - docker --version
 
 script:
-  - golangci-lint run       # run a bunch of code checkers/linters in parallel
-  - go test -v -race ./...  # run all the tests with the race detector enabled
+  - golangci-lint run # run a bunch of code checkers/linters in parallel
+  - go test -v -race ./... # run all the tests with the race detector enabled
+
+# calls goreleaser
+deploy:
+- provider: script
+  skip_cleanup: true
+  script: curl -sL https://git.io/goreleaser | bash
+  on:
+    tags: true
+    condition: $TRAVIS_OS_NAME = linux

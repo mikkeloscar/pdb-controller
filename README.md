@@ -84,6 +84,8 @@ This will use the current context or your local kubeconfig
 ## TODO
 
 * [ ] Instead of long polling, add a Watch feature.
+* [ ] Helm chart.
+* [ ] More logs, prettier printing.
 
 ## LICENSE
 

@@ -5,7 +5,7 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
-	"k8s.io/api/apps/v1beta1"
+	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	pv1beta1 "k8s.io/api/policy/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -223,7 +223,7 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 		}
 
 		switch r := resource.(type) {
-		case v1beta1.Deployment:
+		case appsv1.Deployment:
 			if r.Labels == nil {
 				r.Labels = make(map[string]string)
 			}
@@ -241,7 +241,7 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			}
 			pdb.Labels = labels
 			pdb.Spec.Selector = r.Spec.Selector
-		case v1beta1.StatefulSet:
+		case appsv1.StatefulSet:
 			if r.Labels == nil {
 				r.Labels = make(map[string]string)
 			}

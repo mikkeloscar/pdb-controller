@@ -40,7 +40,7 @@ This is a rough outline of what the workflow for code contributions looks like:
 - Make commits of logical units.
 - Write good commit messages (see below).
 - Push your changes to a topic branch in your fork of the repository.
-- Submit a pull request to [mikkeloscar/pdb-controller][repository].
+- Submit a pull request to [dreamteam-gg/pdb-controller][repository].
 - Your pull request must receive a :thumbsup: from two [Maintainers][maintainers].
 
 Thanks for your contributions!
@@ -62,7 +62,7 @@ issue id.
 
 **Have fun and enjoy hacking!**
 
-[repository]: https://github.com/mikkeloscar/pdb-controller
-[issues]: https://github.com/mikkeloscar/pdb-controller/issues
-[issues_new]: https://github.com/mikkeloscar/pdb-controller/issues/new
-[maintainers]: https://github.com/mikkeloscar/pdb-controller/blob/master/MAINTAINERS
+[repository]: https://github.com/dreamteam-gg/pdb-controller
+[issues]: https://github.com/dreamteam-gg/pdb-controller/issues
+[issues_new]: https://github.com/dreamteam-gg/pdb-controller/issues/new
+[maintainers]: https://github.com/dreamteam-gg/pdb-controller/blob/master/MAINTAINERS

@@ -1,6 +1,6 @@
 # Pod Disruption Budget Controller
-[![Build Status](https://travis-ci.org/mikkeloscar/pdb-controller.svg?branch=master)](https://travis-ci.org/mikkeloscar/pdb-controller)
-[![Coverage Status](https://coveralls.io/repos/github/mikkeloscar/pdb-controller/badge.svg)](https://coveralls.io/github/mikkeloscar/pdb-controller)
+
+Hard fork of https://github.com/mikkeloscar/pdb-controller
 
 This is a simple Kubernetes controller for adding default [Pod Disruption
 Budgets (PDBs)][pdb] for Deployments and StatefulSets in case none are defined. This
@@ -45,34 +45,41 @@ way to ensure broken deployments doesn't block cluster operations.
 
 ## Building
 
-To build this project you need to have [Go](https://golang.org/dl/) installed
-and checkout the repository into your `$GOPATH`.
+To build this project you need to install [Go](https://golang.org/dl/) and checkout the repository.
 
 ```bash
-$ git clone https://github.com/mikkeloscar/pdb-controller.git $GOPATH/src/github.com/mikkeloscar/pdb-controller
+$ git clone https://github.com/dreamteam-gg/pdb-controller.git
+$ cd pdb-controller
+$ go build
 ```
 
-[Dep](https://github.com/golang/dep) is used for vendoring dependencies. They
-are not checked into the repository so you need to fetch then before building.
+## GolangCI-Lint
+
+To run code linting for this project you need to install [GolangCI-Lint](https://github.com/golangci/golangci-lint#install) and checkout the repository.
 
 ```bash
-$ go get -u github.com/golang/dep/cmd/dep
-$ cd $GOPATH/src/github.com/mikkeloscar/pdb-controller
-$ dep ensure -vendor-only -v
+$ git clone https://github.com/dreamteam-gg/pdb-controller.git
+$ cd pdb-controller
+$ golangci-lint run
 ```
-
-Once dependencies are fetch you can build the binary simply by running `make`.
 
 ## Setup
 
-The `pdb-controller` can be run as a deployment in the cluster. See
-[deployment.yaml](/Docs/deployment.yaml) for an example.
+The `pdb-controller` can be run as a deployment in the cluster or locally. See
+[deployment.yaml](/Docs/deployment.yaml) for an in-cluster example.
 
-Deploy it by running:
+Deploy it to cluster by running:
 
 ```bash
 $ kubectl apply -f Docs/deployment.yaml
 ```
+
+Or run locally for debug purposes:
+
+```bash
+$ go run pdb-controller  --kubeconfig=[path-to-kubeconfig]
+```
+This will use the current context or your local kubeconfig
 
 ## TODO
 

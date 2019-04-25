@@ -1,4 +1,4 @@
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: pdb-controller
@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
       - name: pdb-controller
-        image: mikkeloscar/pdb-controller:latest
+        image: dreamteam-gg/pdb-controller:latest
         resources:
           limits:
             cpu: 200m

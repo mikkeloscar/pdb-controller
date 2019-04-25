@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,6 +9,7 @@ import (
 	"gopkg.in/alecthomas/kingpin.v2"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -22,16 +22,23 @@ const (
 
 type config struct {
 	Interval      time.Duration
-	APIServer     *url.URL
 	Debug         bool
 	PDBNameSuffix string
 	NonReadyTTL   time.Duration
+	Kubeconfig    string
+}
+
+func init() {
+	log.SetFormatter(&log.TextFormatter{
+		TimestampFormat: "2006-01-02 15:04:05",
+		FullTimestamp:   true,
+	})
 }
 
 func main() {
 	config := config{}
 	kingpin.Flag("interval", "Interval between creating PDBs.").Default(defaultInterval).DurationVar(&config.Interval)
-	kingpin.Flag("apiserver", "API server url.").URLVar(&config.APIServer)
+	kingpin.Flag("kubeconfig", "Path to kubeconfig file; if not specified, use in-cluster config").ExistingFileVar(&config.Kubeconfig)
 	kingpin.Flag("debug", "Enable debug logging.").BoolVar(&config.Debug)
 	kingpin.Flag("pdb-name-suffix", "Specify default PDB name suffix.").Default(defaultPDBNameSuffix).StringVar(&config.PDBNameSuffix)
 	kingpin.Flag("non-ready-ttl", "Set the ttl for when to remove the managed PDB if the deployment/statefulset is unhealthy (default: disabled).").Default(defaultNonReadyTTL).DurationVar(&config.NonReadyTTL)
@@ -42,20 +49,22 @@ func main() {
 	}
 
 	var err error
-	var kubeConfig *rest.Config
+	var kubernetesClientConfig *rest.Config
 
-	if config.APIServer != nil {
-		kubeConfig = &rest.Config{
-			Host: config.APIServer.String(),
+	if config.Kubeconfig != "" {
+		log.Infof("Using current context from kubeconfig file: %v", config.Kubeconfig)
+		kubernetesClientConfig, err = clientcmd.BuildConfigFromFlags("", config.Kubeconfig)
+		if err != nil {
+			log.Fatal(err)
 		}
 	} else {
-		kubeConfig, err = rest.InClusterConfig()
+		kubernetesClientConfig, err = rest.InClusterConfig()
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	client, err := kubernetes.NewForConfig(kubeConfig)
+	client, err := kubernetes.NewForConfig(kubernetesClientConfig)
 	if err != nil {
 		log.Fatal(err)
 	}

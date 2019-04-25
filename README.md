@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.com/dreamteam-gg/pdb-controller.svg?branch=master)](https://travis-ci.com/dreamteam-gg/pdb-controller)
+
 # Pod Disruption Budget Controller
 
 Hard fork of https://github.com/mikkeloscar/pdb-controller

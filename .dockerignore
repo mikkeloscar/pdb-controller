@@ -1,7 +1,9 @@
 .git
 .gitignore
-.golangci
-Docs
+.golangci.yml
+.goreleaser.yml
+.travis.yml
+docs
 CONTRIBUTING.md
 LICENSE
 MAINTAINERS.md

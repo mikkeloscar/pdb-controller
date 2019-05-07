@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
@@ -13,8 +15,19 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet, namespaces []*v1.Namespace) kubernetes.Interface {
+func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet, namespaces []*v1.Namespace, pods []*v1.Pod) kubernetes.Interface {
 	client := fake.NewSimpleClientset()
+
+	if len(namespaces) == 0 {
+		t.Error("Cannot create mock client with no namespaces")
+	}
+
+	for _, namespace := range namespaces {
+		_, err := client.CoreV1().Namespaces().Create(namespace)
+		if err != nil {
+			t.Error(err)
+		}
+	}
 
 	for _, pdb := range pdbs {
 		_, err := client.PolicyV1beta1().PodDisruptionBudgets(namespaces[0].Name).Create(pdb)
@@ -37,8 +50,8 @@ func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, dep
 		}
 	}
 
-	for _, namespace := range namespaces {
-		_, err := client.CoreV1().Namespaces().Create(namespace)
+	for _, p := range pods {
+		_, err := client.CoreV1().Pods(namespaces[0].Name).Create(p)
 		if err != nil {
 			t.Error(err)
 		}
@@ -57,7 +70,7 @@ func TestRunOnce(t *testing.T) {
 	}
 
 	controller := &PDBController{
-		Interface: setupMockKubernetes(t, nil, nil, nil, namespaces),
+		Interface: setupMockKubernetes(t, nil, nil, nil, namespaces, nil),
 	}
 
 	err := controller.runOnce()
@@ -77,7 +90,7 @@ func TestRun(t *testing.T) {
 	}
 
 	controller := &PDBController{
-		Interface: setupMockKubernetes(t, nil, nil, nil, namespaces),
+		Interface: setupMockKubernetes(t, nil, nil, nil, namespaces, nil),
 	}
 
 	go controller.Run(stopCh)
@@ -166,7 +179,7 @@ func TestRemoveInvalidPDBs(t *testing.T) {
 	}
 
 	controller := &PDBController{
-		Interface: setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
+		Interface: setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces, nil),
 	}
 
 	err := controller.addPDBs(namespaces[0])
@@ -288,7 +301,7 @@ func TestAddPDBs(t *testing.T) {
 	}
 
 	controller := &PDBController{
-		Interface: setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
+		Interface: setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces, nil),
 	}
 
 	err := controller.addPDBs(namespaces[0])
@@ -398,4 +411,135 @@ func TestLabelsIntersect(tt *testing.T) {
 		})
 	}
 
+}
+
+func makePDB(name string, selector map[string]string, owned bool) *pv1beta1.PodDisruptionBudget {
+	pdb := &pv1beta1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: pv1beta1.PodDisruptionBudgetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: selector,
+			},
+		},
+	}
+	if owned {
+		pdb.Labels = ownerLabels
+	}
+	return pdb
+}
+
+func makeDeployment(name string, selector map[string]string, replicas int, nonReadyTTL string) *appsv1.Deployment {
+	var replicasi32 int32 = int32(replicas)
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: selector,
+			},
+			Replicas: &replicasi32,
+			Template: v1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: selector}},
+		},
+	}
+	if nonReadyTTL != "" {
+		deployment.Annotations = map[string]string{nonReadyTTLAnnotationName: nonReadyTTL}
+	}
+	return deployment
+}
+
+func makeDeploymentPod(deploymentName string, index int, labels map[string]string, lastReadyTime time.Duration) *v1.Pod {
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   fmt.Sprintf("%s-%d", deploymentName, index),
+			Labels: labels,
+		},
+		Status: v1.PodStatus{
+			Conditions: []v1.PodCondition{
+				{
+					Type:               v1.PodReady,
+					Status:             v1.ConditionFalse,
+					LastTransitionTime: metav1.NewTime(time.Now().Add(-lastReadyTime)),
+				},
+			},
+		},
+	}
+	return pod
+}
+
+func TestOverridePDBDeleteTTL(t *testing.T) {
+	firstDeploymentSelector := map[string]string{"app": "deployment-1"}
+	secondDeploymentSelector := map[string]string{"app": "deployment-2"}
+	thirdDeploymentSelector := map[string]string{"app": "deployment-3"}
+	fourthDeploymentSelector := map[string]string{"app": "deployment-4"}
+	pdbs := []*pv1beta1.PodDisruptionBudget{
+		makePDB("pdb-1", firstDeploymentSelector, true),
+		makePDB("pdb-2", secondDeploymentSelector, true),
+		makePDB("pdb-3", thirdDeploymentSelector, true),
+		makePDB("pdb-4", fourthDeploymentSelector, true),
+	}
+	deployments := []*appsv1.Deployment{
+		makeDeployment("deployment-1", firstDeploymentSelector, 3, "5s"),
+		makeDeployment("deployment-2", secondDeploymentSelector, 3, "15m"),
+		makeDeployment("deployment-3", thirdDeploymentSelector, 3, ""),
+		makeDeployment("deployment-4", fourthDeploymentSelector, 3, ""),
+	}
+	statefulSets := []*appsv1.StatefulSet{}
+	namespaces := []*v1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "default",
+			},
+		},
+	}
+	pods := make([]*v1.Pod, 0)
+	for i := 0; i < 3; i++ {
+		pods = append(pods, makeDeploymentPod("deployment-1", i, firstDeploymentSelector, time.Duration(i+1)*time.Minute))
+	}
+	for i := 0; i < 3; i++ {
+		pods = append(pods, makeDeploymentPod("deployment-2", i, secondDeploymentSelector, time.Duration(i+5)*time.Minute))
+	}
+	for i := 0; i < 3; i++ {
+		pods = append(pods, makeDeploymentPod("deployment-3", i, thirdDeploymentSelector, time.Duration(i+60)*time.Minute))
+	}
+	for i := 0; i < 3; i++ {
+		pods = append(pods, makeDeploymentPod("deployment-4", i, fourthDeploymentSelector, time.Duration(i+59)*time.Minute))
+	}
+
+	controller := &PDBController{
+		Interface: setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces, pods), nonReadyTTL: time.Hour,
+	}
+
+	err := controller.runOnce()
+	if err != nil {
+		t.Errorf("controller failed to run: %s", err)
+	}
+
+	_, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("pdb-1", metav1.GetOptions{})
+	if err == nil {
+		t.Errorf("PDB pdb-1 still exists")
+	}
+	if err != nil && !errors.IsNotFound(err) {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	_, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("pdb-2", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("PDB pdb-2 could not be found: %s", err)
+	}
+
+	_, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("pdb-3", metav1.GetOptions{})
+	if err == nil {
+		t.Errorf("PDB pdb-3 still exists")
+	}
+	if err != nil && !errors.IsNotFound(err) {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	_, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("pdb-4", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("PDB pdb-4 could not be found: %s", err)
+	}
 }

@@ -48,23 +48,17 @@ This global value can also be overriden by specifying the annotation
 
 ## Building
 
-To build this project you need to have [Go](https://golang.org/dl/) installed
-and checkout the repository into your `$GOPATH`.
+This project uses [Go modules](https://github.com/golang/go/wiki/Modules) as
+introduced in Go 1.11 therefore you need Go >=1.11 installed in order to build.
+If using Go 1.11 you also need to [activate Module
+support](https://github.com/golang/go/wiki/Modules#installing-and-activating-module-support).
 
-```bash
-$ git clone https://github.com/mikkeloscar/pdb-controller.git $GOPATH/src/github.com/mikkeloscar/pdb-controller
+Assuming Go has been setup with module support it can be built simply by running:
+
+```sh
+export GO111MODULE=on # needed if the project is checked out in your $GOPATH.
+$ make
 ```
-
-[Dep](https://github.com/golang/dep) is used for vendoring dependencies. They
-are not checked into the repository so you need to fetch then before building.
-
-```bash
-$ go get -u github.com/golang/dep/cmd/dep
-$ cd $GOPATH/src/github.com/mikkeloscar/pdb-controller
-$ dep ensure -vendor-only -v
-```
-
-Once dependencies are fetch you can build the binary simply by running `make`.
 
 ## Setup
 

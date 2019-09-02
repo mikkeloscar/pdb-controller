@@ -16,6 +16,7 @@ spec:
         application: pdb-controller
         version: latest
     spec:
+      serviceAccountName: pdb-controller
       containers:
       - name: pdb-controller
         image: mikkeloscar/pdb-controller:latest

@@ -1,5 +1,5 @@
 # Pod Disruption Budget Controller
-[![Build Status](https://travis-ci.org/mikkeloscar/pdb-controller.svg?branch=master)](https://travis-ci.org/mikkeloscar/pdb-controller)
+[![Build Status](https://github.com/mikkeloscar/pdb-controller/workflows/ci/badge.svg)](https://github.com/mikkeloscar/pdb-controller/actions?query=branch:master)
 [![Coverage Status](https://coveralls.io/repos/github/mikkeloscar/pdb-controller/badge.svg)](https://coveralls.io/github/mikkeloscar/pdb-controller)
 
 This is a simple Kubernetes controller for adding default [Pod Disruption

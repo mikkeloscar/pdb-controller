@@ -103,7 +103,10 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 	addPDB := make([]interface{}, 0, len(deployments.Items)+len(statefulSets.Items))
 	removePDB := make([]pv1beta1.PodDisruptionBudget, 0, len(deployments.Items)+len(statefulSets.Items))
 
-	nonReadTTL := time.Now().UTC().Add(-n.nonReadyTTL)
+	nonReadyTTL := time.Time{}
+	if n.nonReadyTTL > 0 {
+		nonReadyTTL = time.Now().UTC().Add(-n.nonReadyTTL)
+	}
 
 	for _, deployment := range deployments.Items {
 		matchedPDBs := getPDBs(deployment.Spec.Template.Labels, pdbs.Items, nil)
@@ -139,22 +142,23 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			}
 		}
 
-		// if nonReadyTTL is enabled and not all replicas of the
+		ttl, err := overrideNonReadyTTL(deployment.Annotations, nonReadyTTL)
+		if err != nil {
+			log.Errorf("Failed to override PDB Delete TTL: %s", err)
+		}
+
+		// if nonReadyTTL is defined and not all replicas of the
 		// deployment is ready then we check when the pods were last
 		// ready. This is done to ensure we don't keep PDBs for broken
 		// deployments which would block cluster operations for no
 		// reason (Disrupting a broken deployment doesn't matter).
-		if n.nonReadyTTL > 0 && len(ownedPDBs) > 0 && deployment.Status.ReadyReplicas < *deployment.Spec.Replicas {
+		if !ttl.IsZero() && len(ownedPDBs) > 0 && deployment.Status.ReadyReplicas < *deployment.Spec.Replicas {
 			lastTransitionTime, err := n.getPodsLastTransitionTime(namespace.Name, deployment.Spec.Selector.MatchLabels)
 			if err != nil {
 				log.Errorf("Failed to get pod lastTransitionTime: %s", err)
 				continue
 			}
 
-			ttl, err := overrideNonReadyTTL(deployment.Annotations, nonReadTTL)
-			if err != nil {
-				log.Errorf("Failed to override PDB Delete TTL: %s", err)
-			}
 			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(ttl) {
 				removePDB = append(removePDB, ownedPDBs...)
 			}
@@ -162,11 +166,6 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 	}
 
 	for _, statefulSet := range statefulSets.Items {
-		// only add PDB for statefulsets where all replicas are ready
-		if statefulSet.Status.ReadyReplicas < statefulSet.Status.Replicas {
-			continue
-		}
-
 		matchedPDBs := getPDBs(statefulSet.Spec.Template.Labels, pdbs.Items, nil)
 
 		// if no PDB exist for the statefulset and all replicas are
@@ -200,21 +199,21 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			}
 		}
 
-		// if nonReadyTTL is enabled and not all replicas of the
+		ttl, err := overrideNonReadyTTL(statefulSet.Annotations, nonReadyTTL)
+		if err != nil {
+			log.Errorf("Failed to override PDB Delete TTL: %s", err)
+		}
+
+		// if nonReadyTTL is defined and not all replicas of the
 		// statefulset is ready then we check when the pods were last
 		// ready. This is done to ensure we don't keep PDBs for broken
 		// statefulsets which would block cluster operations for no
 		// reason (Disrupting a broken statefulset doesn't matter).
-		if n.nonReadyTTL > 0 && len(ownedPDBs) > 0 && statefulSet.Status.ReadyReplicas < *statefulSet.Spec.Replicas {
+		if !ttl.IsZero() && len(ownedPDBs) > 0 && statefulSet.Status.ReadyReplicas < *statefulSet.Spec.Replicas {
 			lastTransitionTime, err := n.getPodsLastTransitionTime(namespace.Name, statefulSet.Spec.Selector.MatchLabels)
 			if err != nil {
 				log.Errorf("Failed to get pod lastTransitionTime: %s", err)
 				continue
-			}
-
-			ttl, err := overrideNonReadyTTL(statefulSet.Annotations, nonReadTTL)
-			if err != nil {
-				log.Errorf("Failed to override PDB Delete TTL: %s", err)
 			}
 
 			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(ttl) {

@@ -9,15 +9,15 @@ import (
 	v1 "k8s.io/api/core/v1"
 	pv1beta1 "k8s.io/api/policy/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 )
 
 const (
-	heritageLabel             = "heritage"
-	pdbController             = "pdb-controller"
-	nonReadyTTLAnnotationName = "pdb-controller.zalando.org/non-ready-ttl"
+	heritageLabel               = "heritage"
+	pdbController               = "pdb-controller"
+	nonReadyTTLAnnotationName   = "pdb-controller.zalando.org/non-ready-ttl"
+	nonReadySinceAnnotationName = "pdb-controller.zalando.org/non-ready-since"
 )
 
 var (
@@ -147,21 +147,34 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			log.Errorf("Failed to override PDB Delete TTL: %s", err)
 		}
 
-		// if nonReadyTTL is defined and not all replicas of the
-		// deployment is ready then we check when the pods were last
-		// ready. This is done to ensure we don't keep PDBs for broken
-		// deployments which would block cluster operations for no
-		// reason (Disrupting a broken deployment doesn't matter).
-		if !ttl.IsZero() && len(ownedPDBs) > 0 && deployment.Status.ReadyReplicas < *deployment.Spec.Replicas {
-			lastTransitionTime, err := n.getPodsLastTransitionTime(namespace.Name, deployment.Spec.Selector.MatchLabels)
+		var nonReadySince time.Time
+		if nonReadySinceStr, ok := deployment.Annotations[nonReadySinceAnnotationName]; ok {
+			nonReadySince, err = time.Parse(time.RFC3339, nonReadySinceStr)
 			if err != nil {
-				log.Errorf("Failed to get pod lastTransitionTime: %s", err)
+				log.Errorf("Failed to parse non-ready-since annotation '%s': %v", nonReadySinceStr, err)
+			}
+		}
+
+		if !nonReadySince.IsZero() {
+			if deployment.Status.ReadyReplicas >= *deployment.Spec.Replicas {
+				delete(deployment.Annotations, nonReadySinceAnnotationName)
+				// TODO: update
+			} else {
+				if !ttl.IsZero() && len(ownedPDBs) > 0 && nonReadySince.Before(ttl) {
+					removePDB = append(removePDB, ownedPDBs...)
+				}
 				continue
 			}
-
-			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(ttl) {
-				removePDB = append(removePDB, ownedPDBs...)
+		} else {
+			if deployment.Status.ReadyReplicas >= *deployment.Spec.Replicas {
+				continue
 			}
+			deployment.Annotations[nonReadySinceAnnotationName] = time.Now().UTC().Format(time.RFC3339)
+		}
+
+		_, err = n.AppsV1().Deployments(namespace.Name).Update(&deployment)
+		if err != nil {
+			log.Errorf("Failed to update deployment '%s/%s': %v", deployment.Namespace, deployment.Name, err)
 		}
 	}
 
@@ -204,21 +217,33 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			log.Errorf("Failed to override PDB Delete TTL: %s", err)
 		}
 
-		// if nonReadyTTL is defined and not all replicas of the
-		// statefulset is ready then we check when the pods were last
-		// ready. This is done to ensure we don't keep PDBs for broken
-		// statefulsets which would block cluster operations for no
-		// reason (Disrupting a broken statefulset doesn't matter).
-		if !ttl.IsZero() && len(ownedPDBs) > 0 && statefulSet.Status.ReadyReplicas < *statefulSet.Spec.Replicas {
-			lastTransitionTime, err := n.getPodsLastTransitionTime(namespace.Name, statefulSet.Spec.Selector.MatchLabels)
+		var nonReadySince time.Time
+		if nonReadySinceStr, ok := statefulSet.Annotations[nonReadySinceAnnotationName]; ok {
+			nonReadySince, err = time.Parse(time.RFC3339, nonReadySinceStr)
 			if err != nil {
-				log.Errorf("Failed to get pod lastTransitionTime: %s", err)
+				log.Errorf("Failed to parse non-ready-since annotation '%s': %v", nonReadySinceStr, err)
+			}
+		}
+
+		if !nonReadySince.IsZero() {
+			if statefulSet.Status.ReadyReplicas >= *statefulSet.Spec.Replicas {
+				delete(statefulSet.Annotations, nonReadySinceAnnotationName)
+			} else {
+				if !ttl.IsZero() && len(ownedPDBs) > 0 && nonReadySince.Before(ttl) {
+					removePDB = append(removePDB, ownedPDBs...)
+				}
 				continue
 			}
-
-			if !lastTransitionTime.IsZero() && lastTransitionTime.Before(ttl) {
-				removePDB = append(removePDB, ownedPDBs...)
+		} else {
+			if statefulSet.Status.ReadyReplicas >= *statefulSet.Spec.Replicas {
+				continue
 			}
+			statefulSet.Annotations[nonReadySinceAnnotationName] = time.Now().UTC().Format(time.RFC3339)
+		}
+
+		_, err = n.AppsV1().StatefulSets(namespace.Name).Update(&statefulSet)
+		if err != nil {
+			log.Errorf("Failed to update statefulset '%s/%s': %v", statefulSet.Namespace, statefulSet.Name, err)
 		}
 	}
 
@@ -316,39 +341,6 @@ func overrideNonReadyTTL(annotations map[string]string, nonReadyTTL time.Time) (
 		return time.Now().UTC().Add(-duration), nil
 	}
 	return nonReadyTTL, nil
-}
-
-// getPodsLastTransitionTime returns the latest transition time for the pod not
-// ready condition of all pods matched by the selector.
-func (n *PDBController) getPodsLastTransitionTime(namespace string, selector map[string]string) (time.Time, error) {
-	opts := metav1.ListOptions{
-		LabelSelector: labels.Set(selector).String(),
-	}
-	pods, err := n.CoreV1().Pods(namespace).List(opts)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	lastTransitionTime := time.Time{}
-
-	for _, pod := range pods.Items {
-		for _, cond := range pod.Status.Conditions {
-			if cond.Type != v1.PodReady {
-				continue
-			}
-
-			if cond.Status == v1.ConditionTrue {
-				break
-			}
-
-			if cond.LastTransitionTime.After(lastTransitionTime) {
-				lastTransitionTime = cond.LastTransitionTime.Time
-			}
-			break
-		}
-	}
-
-	return lastTransitionTime, nil
 }
 
 // pdbSpecValid returns true if the PDB spec is up-to-date

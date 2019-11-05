@@ -411,10 +411,11 @@ func TestLabelsIntersect(tt *testing.T) {
 	}
 }
 
-func makePDB(name string, selector map[string]string, owned bool) *pv1beta1.PodDisruptionBudget {
+func makePDB(name string, selector map[string]string, owned bool, lastReadyTime time.Duration) *pv1beta1.PodDisruptionBudget {
 	pdb := &pv1beta1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
+			Name:        name,
+			Annotations: make(map[string]string),
 		},
 		Spec: pv1beta1.PodDisruptionBudgetSpec{
 			Selector: &metav1.LabelSelector{
@@ -425,10 +426,13 @@ func makePDB(name string, selector map[string]string, owned bool) *pv1beta1.PodD
 	if owned {
 		pdb.Labels = ownerLabels
 	}
+	if lastReadyTime > 0 {
+		pdb.Annotations[nonReadySinceAnnotationName] = time.Now().Add(-lastReadyTime).Format(time.RFC3339)
+	}
 	return pdb
 }
 
-func makeDeployment(name string, selector map[string]string, replicas, readyReplicas int32, nonReadyTTL string, lastReadyTime time.Duration) *appsv1.Deployment {
+func makeDeployment(name string, selector map[string]string, replicas, readyReplicas int32, nonReadyTTL string) *appsv1.Deployment {
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -448,13 +452,10 @@ func makeDeployment(name string, selector map[string]string, replicas, readyRepl
 	if nonReadyTTL != "" {
 		deployment.Annotations[nonReadyTTLAnnotationName] = nonReadyTTL
 	}
-	if lastReadyTime > 0 {
-		deployment.Annotations[nonReadySinceAnnotationName] = time.Now().Add(-lastReadyTime).Format(time.RFC3339)
-	}
 	return deployment
 }
 
-func makeStatefulset(name string, selector map[string]string, replicas, readyReplicas int32, nonReadyTTL string, lastReadyTime time.Duration) *appsv1.StatefulSet {
+func makeStatefulset(name string, selector map[string]string, replicas, readyReplicas int32, nonReadyTTL string) *appsv1.StatefulSet {
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -473,9 +474,6 @@ func makeStatefulset(name string, selector map[string]string, replicas, readyRep
 	}
 	if nonReadyTTL != "" {
 		sts.Annotations[nonReadyTTLAnnotationName] = nonReadyTTL
-	}
-	if lastReadyTime > 0 {
-		sts.Annotations[nonReadySinceAnnotationName] = time.Now().Add(-lastReadyTime).Format(time.RFC3339)
 	}
 	return sts
 }
@@ -543,8 +541,8 @@ func TestOverridePDBDeleteTTL(tt *testing.T) {
 			statefulSetSelector := map[string]string{"type": "statefulset"}
 
 			pdbs := []*pv1beta1.PodDisruptionBudget{
-				makePDB("deployment-pdb", deploymentSelector, true),
-				makePDB("statefulset-pdb", statefulSetSelector, true),
+				makePDB("deployment-pdb", deploymentSelector, true, tc.lastReadyTime),
+				makePDB("statefulset-pdb", statefulSetSelector, true, tc.lastReadyTime),
 			}
 			deployments := []*appsv1.Deployment{
 				makeDeployment(
@@ -553,7 +551,6 @@ func TestOverridePDBDeleteTTL(tt *testing.T) {
 					tc.replicas,
 					tc.readyReplicas,
 					tc.nonReadyTTL,
-					tc.lastReadyTime,
 				),
 			}
 			statefulSets := []*appsv1.StatefulSet{
@@ -563,7 +560,6 @@ func TestOverridePDBDeleteTTL(tt *testing.T) {
 					tc.replicas,
 					tc.readyReplicas,
 					tc.nonReadyTTL,
-					tc.lastReadyTime,
 				),
 			}
 			namespaces := []*v1.Namespace{

@@ -10,6 +10,7 @@ import (
 	pv1beta1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -101,6 +102,14 @@ func TestRemoveInvalidPDBs(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:   "pdb-1",
 				Labels: ownerLabels,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: "apps/v1",
+						Kind:       "Deployment",
+						Name:       "deployment-1",
+						UID:        types.UID("deployment-1"),
+					},
+				},
 			},
 			Spec: pv1beta1.PodDisruptionBudgetSpec{
 				Selector: &metav1.LabelSelector{
@@ -113,6 +122,14 @@ func TestRemoveInvalidPDBs(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:   "pdb-2",
 				Labels: ownerLabels,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: "apps/v1",
+						Kind:       "StatefulSet",
+						Name:       "statefulset-1",
+						UID:        types.UID("statefulset-1"),
+					},
+				},
 			},
 			Spec: pv1beta1.PodDisruptionBudgetSpec{
 				Selector: &metav1.LabelSelector{
@@ -125,10 +142,15 @@ func TestRemoveInvalidPDBs(t *testing.T) {
 
 	deployments := []*appsv1.Deployment{
 		{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        "deployment-1",
 				Labels:      deplabels,
 				Annotations: make(map[string]string),
+				UID:         types.UID("deployment-1"),
 			},
 			Spec: appsv1.DeploymentSpec{
 				Replicas: &replicas,
@@ -146,10 +168,15 @@ func TestRemoveInvalidPDBs(t *testing.T) {
 
 	statefulSets := []*appsv1.StatefulSet{
 		{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "apps/v1",
+				Kind:       "StatefulSet",
+			},
 			ObjectMeta: metav1.ObjectMeta{
-				Name:        "stateful-set-1",
+				Name:        "statefulset-1",
 				Labels:      sslabels,
 				Annotations: make(map[string]string),
+				UID:         types.UID("statefulset-1"),
 			},
 			Spec: appsv1.StatefulSetSpec{
 				Replicas: &replicas,
@@ -411,7 +438,7 @@ func TestLabelsIntersect(tt *testing.T) {
 	}
 }
 
-func makePDB(name string, selector map[string]string, owned bool, lastReadyTime time.Duration) *pv1beta1.PodDisruptionBudget {
+func makePDB(name string, selector map[string]string, ownerReferences []metav1.OwnerReference, lastReadyTime time.Duration) *pv1beta1.PodDisruptionBudget {
 	pdb := &pv1beta1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -423,8 +450,9 @@ func makePDB(name string, selector map[string]string, owned bool, lastReadyTime 
 			},
 		},
 	}
-	if owned {
+	if len(ownerReferences) > 0 {
 		pdb.Labels = ownerLabels
+		pdb.OwnerReferences = ownerReferences
 	}
 	if lastReadyTime > 0 {
 		pdb.Annotations[nonReadySinceAnnotationName] = time.Now().Add(-lastReadyTime).Format(time.RFC3339)
@@ -434,8 +462,13 @@ func makePDB(name string, selector map[string]string, owned bool, lastReadyTime 
 
 func makeDeployment(name string, selector map[string]string, replicas, readyReplicas int32, nonReadyTTL string) *appsv1.Deployment {
 	deployment := &appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
+			UID:         types.UID("deployment-uid-" + name),
 			Annotations: make(map[string]string),
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -457,8 +490,13 @@ func makeDeployment(name string, selector map[string]string, replicas, readyRepl
 
 func makeStatefulset(name string, selector map[string]string, replicas, readyReplicas int32, nonReadyTTL string) *appsv1.StatefulSet {
 	sts := &appsv1.StatefulSet{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps/v1",
+			Kind:       "StatefulSet",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
+			UID:         types.UID("statefulset-uid-" + name),
 			Annotations: make(map[string]string),
 		},
 		Spec: appsv1.StatefulSetSpec{
@@ -541,8 +579,32 @@ func TestOverridePDBDeleteTTL(tt *testing.T) {
 			statefulSetSelector := map[string]string{"type": "statefulset"}
 
 			pdbs := []*pv1beta1.PodDisruptionBudget{
-				makePDB("deployment-pdb", deploymentSelector, true, tc.lastReadyTime),
-				makePDB("statefulset-pdb", statefulSetSelector, true, tc.lastReadyTime),
+				makePDB(
+					"deployment-pdb",
+					deploymentSelector,
+					[]metav1.OwnerReference{
+						{
+							APIVersion: "apps/v1",
+							Kind:       "Deployment",
+							Name:       "deployment-x",
+							UID:        types.UID("deployment-uid-deployment-x"),
+						},
+					},
+					tc.lastReadyTime,
+				),
+				makePDB(
+					"statefulset-pdb",
+					statefulSetSelector,
+					[]metav1.OwnerReference{
+						{
+							APIVersion: "apps/v1",
+							Kind:       "StatefulSet",
+							Name:       "statefulset-x",
+							UID:        types.UID("statefulset-uid-statefulset-x"),
+						},
+					},
+					tc.lastReadyTime,
+				),
 			}
 			deployments := []*appsv1.Deployment{
 				makeDeployment(

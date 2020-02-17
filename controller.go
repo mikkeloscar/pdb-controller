@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	pv1beta1 "k8s.io/api/policy/v1beta1"
@@ -129,7 +130,7 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 
 		// for resources with only one replica, check if we previously
 		// created PDBs and remove them.
-		ownedPDBs := getPDBs(resource.TemplateLabels(), matchedPDBs, ownerLabels)
+		ownedPDBs := getOwnedPDBs(matchedPDBs, resource)
 
 		if len(ownedPDBs) > 0 && resource.Replicas() <= 1 {
 			removePDB = append(removePDB, ownedPDBs...)
@@ -189,6 +190,10 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			pdb.Annotations[nonReadySinceAnnotationName] = time.Now().UTC().Format(time.RFC3339)
 		}
 
+		if !cmp.Equal(resource.Selector(), pdb.Spec.Selector) {
+			pdb.Spec.Selector = resource.Selector()
+		}
+
 		_, err = n.PolicyV1beta1().PodDisruptionBudgets(namespace.Name).Update(pdb)
 		if err != nil {
 			log.Errorf("Failed to update PDB '%s/%s': %v", pdb.Namespace, pdb.Name, err)
@@ -211,36 +216,36 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			}
 			labels := r.Labels
 			labels[heritageLabel] = pdbController
-			pdb.Name = r.Name
+			pdb.Name = r.Name()
 			pdb.Namespace = r.Namespace
 			pdb.OwnerReferences = []metav1.OwnerReference{
 				{
 					APIVersion: "apps/v1",
 					Kind:       "Deployment",
-					Name:       r.Name,
-					UID:        r.UID,
+					Name:       r.Name(),
+					UID:        r.UID(),
 				},
 			}
 			pdb.Labels = labels
-			pdb.Spec.Selector = r.Spec.Selector
+			pdb.Spec.Selector = r.Selector()
 		case statefulSet:
 			if r.Labels == nil {
 				r.Labels = make(map[string]string)
 			}
 			labels := r.Labels
 			labels[heritageLabel] = pdbController
-			pdb.Name = r.Name
+			pdb.Name = r.Name()
 			pdb.Namespace = r.Namespace
 			pdb.OwnerReferences = []metav1.OwnerReference{
 				{
 					APIVersion: "apps/v1",
 					Kind:       "StatefulSet",
-					Name:       r.Name,
-					UID:        r.UID,
+					Name:       r.Name(),
+					UID:        r.UID(),
 				},
 			}
 			pdb.Labels = labels
-			pdb.Spec.Selector = r.Spec.Selector
+			pdb.Spec.Selector = r.Selector()
 		}
 
 		if n.pdbNameSuffix != "" {
@@ -305,6 +310,30 @@ func getPDBs(labels map[string]string, pdbs []pv1beta1.PodDisruptionBudget, sele
 		}
 	}
 	return matchedPDBs
+}
+
+func getOwnedPDBs(pdbs []pv1beta1.PodDisruptionBudget, owner kubeResource) []pv1beta1.PodDisruptionBudget {
+	ownedPDBs := make([]pv1beta1.PodDisruptionBudget, 0, len(pdbs))
+	for _, pdb := range pdbs {
+		if isOwnedReference(owner, pdb.ObjectMeta) {
+			ownedPDBs = append(ownedPDBs, pdb)
+		}
+	}
+	return ownedPDBs
+}
+
+// isOwnedReference returns true if the dependent object is owned by the owner
+// object.
+func isOwnedReference(owner kubeResource, dependent metav1.ObjectMeta) bool {
+	for _, ref := range dependent.OwnerReferences {
+		if ref.APIVersion == owner.APIVersion() &&
+			ref.Kind == owner.Kind() &&
+			ref.UID == owner.UID() &&
+			ref.Name == owner.Name() {
+			return true
+		}
+	}
+	return false
 }
 
 // containLabels reports whether expectedLabels are in labels.

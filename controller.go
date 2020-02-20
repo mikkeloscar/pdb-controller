@@ -110,10 +110,20 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 	}
 
 	for _, d := range deployments.Items {
+		// manually set Kind and APIVersion because of a bug in
+		// client-go
+		// https://github.com/kubernetes/client-go/issues/308
+		d.Kind = "Deployment"
+		d.APIVersion = "apps/v1"
 		resources = append(resources, deployment{d})
 	}
 
 	for _, s := range statefulSets.Items {
+		// manually set Kind and APIVersion because of a bug in
+		// client-go
+		// https://github.com/kubernetes/client-go/issues/308
+		s.Kind = "StatefulSet"
+		s.APIVersion = "apps/v1"
 		resources = append(resources, statefulSet{s})
 	}
 

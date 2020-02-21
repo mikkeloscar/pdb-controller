@@ -60,10 +60,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	controller, err := NewPDBController(config.Interval, client, config.PDBNameSuffix, config.NonReadyTTL)
-	if err != nil {
-		log.Fatal(err)
-	}
+	controller := NewPDBController(config.Interval, client, config.PDBNameSuffix, config.NonReadyTTL)
 
 	stopChan := make(chan struct{}, 1)
 	go handleSigterm(stopChan)

@@ -276,6 +276,9 @@ func TestAddPDBs(t *testing.T) {
 					},
 				},
 			},
+			Status: appsv1.DeploymentStatus{
+				ReadyReplicas: replicas,
+			},
 		},
 	}
 
@@ -315,6 +318,9 @@ func TestAddPDBs(t *testing.T) {
 					},
 				},
 			},
+			Status: appsv1.StatefulSetStatus{
+				ReadyReplicas: replicas,
+			},
 		},
 	}
 
@@ -326,14 +332,21 @@ func TestAddPDBs(t *testing.T) {
 		},
 	}
 
-	controller := &PDBController{
-		Interface: setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
-	}
+	controller := NewPDBController(
+		0,
+		setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
+		"-pdb-controller",
+		0,
+	)
 
 	err := controller.addPDBs(namespaces[0])
 	if err != nil {
 		t.Error(err)
 	}
+
+	allPDBs, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").List(metav1.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, allPDBs.Items, 3) // expect to add two new PDBs
 }
 
 func TestGetPDBs(t *testing.T) {
@@ -443,6 +456,7 @@ func makePDB(name string, selector map[string]string, ownerReferences []metav1.O
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
 			Annotations: make(map[string]string),
+			UID:         types.UID(name),
 		},
 		Spec: pv1beta1.PodDisruptionBudgetSpec{
 			Selector: &metav1.LabelSelector{
@@ -516,14 +530,17 @@ func makeStatefulset(name string, selector map[string]string, replicas, readyRep
 	return sts
 }
 
-func TestOverridePDBDeleteTTL(tt *testing.T) {
+func TestController(tt *testing.T) {
 	for _, tc := range []struct {
-		msg           string
-		replicas      int32
-		readyReplicas int32
-		nonReadyTTL   string
-		lastReadyTime time.Duration
-		pdbExists     bool
+		msg                    string
+		replicas               int32
+		readyReplicas          int32
+		nonReadyTTL            string
+		lastReadyTime          time.Duration
+		pdbExists              bool
+		pdbDeploymentSelector  map[string]string
+		pdbStatefulSetSelector map[string]string
+		addtionalPDBs          []*pv1beta1.PodDisruptionBudget
 	}{
 		{
 			msg:           "drop pdb when nonReadyTTL is exceeded",
@@ -573,15 +590,68 @@ func TestOverridePDBDeleteTTL(tt *testing.T) {
 			lastReadyTime: 60 * time.Minute,
 			pdbExists:     true,
 		},
+		{
+			msg:           "update owned PDB not matching",
+			replicas:      3,
+			readyReplicas: 3,
+			nonReadyTTL:   "",
+			lastReadyTime: 0,
+			pdbExists:     true,
+			pdbDeploymentSelector: map[string]string{
+				"not-matching": "deployment",
+			},
+			pdbStatefulSetSelector: map[string]string{
+				"not-matching": "statefulset",
+			},
+		},
+		{
+			msg:           "drop owned PDB if others are matching",
+			replicas:      3,
+			readyReplicas: 3,
+			nonReadyTTL:   "",
+			lastReadyTime: 0,
+			pdbExists:     false,
+			addtionalPDBs: []*pv1beta1.PodDisruptionBudget{
+				makePDB(
+					"custom-deployment-pdb",
+					map[string]string{"type": "deployment"},
+					nil,
+					0,
+				),
+				makePDB(
+					"custom-statefulset-pdb",
+					map[string]string{"type": "statefulset"},
+					nil,
+					0,
+				),
+			},
+		},
+		{
+			msg:           "drop owned PDB if less than 2 ready replicas",
+			replicas:      1,
+			readyReplicas: 1,
+			nonReadyTTL:   "",
+			lastReadyTime: 0,
+			pdbExists:     false,
+		},
 	} {
 		tt.Run(tc.msg, func(t *testing.T) {
 			deploymentSelector := map[string]string{"type": "deployment"}
 			statefulSetSelector := map[string]string{"type": "statefulset"}
 
+			pdbDeploymentSelector := deploymentSelector
+			pdbStatefulSetSelector := statefulSetSelector
+			if tc.pdbDeploymentSelector != nil {
+				pdbDeploymentSelector = tc.pdbDeploymentSelector
+			}
+			if tc.pdbStatefulSetSelector != nil {
+				pdbStatefulSetSelector = tc.pdbStatefulSetSelector
+			}
+
 			pdbs := []*pv1beta1.PodDisruptionBudget{
 				makePDB(
 					"deployment-pdb",
-					deploymentSelector,
+					pdbDeploymentSelector,
 					[]metav1.OwnerReference{
 						{
 							APIVersion: "apps/v1",
@@ -594,7 +664,7 @@ func TestOverridePDBDeleteTTL(tt *testing.T) {
 				),
 				makePDB(
 					"statefulset-pdb",
-					statefulSetSelector,
+					pdbStatefulSetSelector,
 					[]metav1.OwnerReference{
 						{
 							APIVersion: "apps/v1",
@@ -605,6 +675,9 @@ func TestOverridePDBDeleteTTL(tt *testing.T) {
 					},
 					tc.lastReadyTime,
 				),
+			}
+			if len(tc.addtionalPDBs) > 0 {
+				pdbs = append(pdbs, tc.addtionalPDBs...)
 			}
 			deployments := []*appsv1.Deployment{
 				makeDeployment(
@@ -642,18 +715,20 @@ func TestOverridePDBDeleteTTL(tt *testing.T) {
 			}
 
 			// deployment
-			_, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("deployment-pdb", metav1.GetOptions{})
+			pdb, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("deployment-pdb", metav1.GetOptions{})
 			if tc.pdbExists {
 				require.NoError(t, err)
+				require.Equal(t, pdb.Spec.Selector.MatchLabels, deploymentSelector)
 			} else {
 				require.Error(t, err)
 				require.True(t, errors.IsNotFound(err))
 			}
 
 			// statefulset
-			_, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("statefulset-pdb", metav1.GetOptions{})
+			pdb, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("statefulset-pdb", metav1.GetOptions{})
 			if tc.pdbExists {
 				require.NoError(t, err)
+				require.Equal(t, pdb.Spec.Selector.MatchLabels, statefulSetSelector)
 			} else {
 				require.Error(t, err)
 				require.True(t, errors.IsNotFound(err))

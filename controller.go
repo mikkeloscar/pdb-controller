@@ -34,15 +34,13 @@ type PDBController struct {
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration) (*PDBController, error) {
-	controller := &PDBController{
+func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration) *PDBController {
+	return &PDBController{
 		Interface:     client,
 		interval:      interval,
 		pdbNameSuffix: pdbNameSuffix,
 		nonReadyTTL:   nonReadyTTL,
 	}
-
-	return controller, nil
 }
 
 func (n *PDBController) runOnce() error {
@@ -129,29 +127,38 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 
 	for _, resource := range resources {
 		matchedPDBs := getPDBs(resource.TemplateLabels(), pdbs.Items, nil)
+		ownedPDBs := getOwnedPDBs(pdbs.Items, resource, ownerLabels)
 
 		// if no PDB exist for the deployment and all replicas are
 		// ready, add one
 		if resource.StatusReadyReplicas() == resource.Replicas() {
-			if len(matchedPDBs) == 0 && resource.Replicas() > 1 {
+			if len(matchedPDBs) == 0 && len(ownedPDBs) == 0 && resource.Replicas() > 1 {
 				addPDB = append(addPDB, resource)
 			}
 		}
 
 		// for resources with only one replica, check if we previously
 		// created PDBs and remove them.
-		ownedPDBs := getOwnedPDBs(matchedPDBs, resource)
-
 		if len(ownedPDBs) > 0 && resource.Replicas() <= 1 {
 			removePDB = append(removePDB, ownedPDBs...)
 			continue
 		}
 
-		// if there are owned PDBs and a non-owned PDBs remove the
+		notOwnedMatchedPDBs := pdbSetDifference(matchedPDBs, ownedPDBs)
+
+		// if there are not owned but matched PDBs, remove the
 		// owned PDBs to not shadow what's defined by users.
-		if len(ownedPDBs) != len(matchedPDBs) {
+		if len(notOwnedMatchedPDBs) > 0 {
 			removePDB = append(removePDB, ownedPDBs...)
 			continue
+		}
+
+		ownedUnmatchedPDBs := pdbSetDifference(ownedPDBs, matchedPDBs)
+
+		// remove additional owned PDBs which no longer match the
+		// resource
+		if len(ownedPDBs) > len(ownedUnmatchedPDBs) {
+			removePDB = append(removePDB, ownedUnmatchedPDBs...)
 		}
 
 		validPDBs := make([]pv1beta1.PodDisruptionBudget, 0, len(ownedPDBs))
@@ -184,9 +191,12 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 			}
 		}
 
+		updateNeeded := false
+
 		if !nonReadySince.IsZero() {
 			if resource.StatusReadyReplicas() >= resource.Replicas() {
 				delete(pdb.Annotations, nonReadySinceAnnotationName)
+				updateNeeded = true
 			} else {
 				if !ttl.IsZero() && len(ownedPDBs) > 0 && nonReadySince.Before(ttl) {
 					removePDB = append(removePDB, ownedPDBs...)
@@ -194,19 +204,22 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 				continue
 			}
 		} else {
-			if resource.StatusReadyReplicas() >= resource.Replicas() {
-				continue
+			if resource.StatusReadyReplicas() < resource.Replicas() {
+				pdb.Annotations[nonReadySinceAnnotationName] = time.Now().UTC().Format(time.RFC3339)
+				updateNeeded = true
 			}
-			pdb.Annotations[nonReadySinceAnnotationName] = time.Now().UTC().Format(time.RFC3339)
 		}
 
 		if !cmp.Equal(resource.Selector(), pdb.Spec.Selector) {
 			pdb.Spec.Selector = resource.Selector()
+			updateNeeded = true
 		}
 
-		_, err = n.PolicyV1beta1().PodDisruptionBudgets(namespace.Name).Update(pdb)
-		if err != nil {
-			log.Errorf("Failed to update PDB '%s/%s': %v", pdb.Namespace, pdb.Name, err)
+		if updateNeeded {
+			_, err = n.PolicyV1beta1().PodDisruptionBudgets(namespace.Name).Update(pdb)
+			if err != nil {
+				log.Errorf("Failed to update PDB '%s/%s': %v", pdb.Namespace, pdb.Name, err)
+			}
 		}
 	}
 
@@ -322,10 +335,10 @@ func getPDBs(labels map[string]string, pdbs []pv1beta1.PodDisruptionBudget, sele
 	return matchedPDBs
 }
 
-func getOwnedPDBs(pdbs []pv1beta1.PodDisruptionBudget, owner kubeResource) []pv1beta1.PodDisruptionBudget {
+func getOwnedPDBs(pdbs []pv1beta1.PodDisruptionBudget, owner kubeResource, selector map[string]string) []pv1beta1.PodDisruptionBudget {
 	ownedPDBs := make([]pv1beta1.PodDisruptionBudget, 0, len(pdbs))
 	for _, pdb := range pdbs {
-		if isOwnedReference(owner, pdb.ObjectMeta) {
+		if isOwnedReference(owner, pdb.ObjectMeta) && containLabels(pdb.Labels, selector) {
 			ownedPDBs = append(ownedPDBs, pdb)
 		}
 	}
@@ -373,4 +386,23 @@ func labelsIntersect(a, b map[string]string) bool {
 	}
 
 	return intersect
+}
+
+func pdbSetDifference(a, b []pv1beta1.PodDisruptionBudget) []pv1beta1.PodDisruptionBudget {
+	diff := make([]pv1beta1.PodDisruptionBudget, 0, len(a))
+	for _, pdbA := range a {
+		pdbA := pdbA
+		found := false
+		for _, pdbB := range b {
+			if pdbA.UID == pdbB.UID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			diff = append(diff, pdbA)
+		}
+	}
+
+	return diff
 }

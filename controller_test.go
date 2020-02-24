@@ -11,7 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -89,295 +88,6 @@ func TestRun(t *testing.T) {
 
 	go controller.Run(stopCh)
 	stopCh <- struct{}{}
-}
-
-func TestRemoveInvalidPDBs(t *testing.T) {
-	deplabels := map[string]string{"foo": "deployment"}
-	sslabels := map[string]string{"foo": "statefulset"}
-	replicas := int32(2)
-
-	one := intstr.FromInt(1)
-	pdbs := []*pv1beta1.PodDisruptionBudget{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:   "pdb-1",
-				Labels: ownerLabels,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: "apps/v1",
-						Kind:       "Deployment",
-						Name:       "deployment-1",
-						UID:        types.UID("deployment-1"),
-					},
-				},
-			},
-			Spec: pv1beta1.PodDisruptionBudgetSpec{
-				Selector: &metav1.LabelSelector{
-					MatchLabels: deplabels,
-				},
-				MinAvailable: &one,
-			},
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:   "pdb-2",
-				Labels: ownerLabels,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: "apps/v1",
-						Kind:       "StatefulSet",
-						Name:       "statefulset-1",
-						UID:        types.UID("statefulset-1"),
-					},
-				},
-			},
-			Spec: pv1beta1.PodDisruptionBudgetSpec{
-				Selector: &metav1.LabelSelector{
-					MatchLabels: sslabels,
-				},
-				MinAvailable: &one,
-			},
-		},
-	}
-
-	deployments := []*appsv1.Deployment{
-		{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "apps/v1",
-				Kind:       "Deployment",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        "deployment-1",
-				Labels:      deplabels,
-				Annotations: make(map[string]string),
-				UID:         types.UID("deployment-1"),
-			},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: &replicas,
-				Selector: &metav1.LabelSelector{
-					MatchLabels: deplabels,
-				},
-				Template: v1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: deplabels,
-					},
-				},
-			},
-		},
-	}
-
-	statefulSets := []*appsv1.StatefulSet{
-		{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "apps/v1",
-				Kind:       "StatefulSet",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        "statefulset-1",
-				Labels:      sslabels,
-				Annotations: make(map[string]string),
-				UID:         types.UID("statefulset-1"),
-			},
-			Spec: appsv1.StatefulSetSpec{
-				Replicas: &replicas,
-				Selector: &metav1.LabelSelector{
-					MatchLabels: sslabels,
-				},
-				Template: v1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: sslabels,
-					},
-				},
-			},
-		},
-	}
-
-	namespaces := []*v1.Namespace{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "default",
-			},
-		},
-	}
-
-	controller := &PDBController{
-		Interface: setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
-	}
-
-	err := controller.addPDBs(namespaces[0])
-	if err != nil {
-		t.Error(err)
-	}
-
-	for _, pdb := range []string{"pdb-1", "pdb-2"} {
-		pdbResource, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get(pdb, metav1.GetOptions{})
-		if err == nil {
-			t.Fatalf("unexpected pdb (%s) found: %v", pdb, pdbResource)
-		}
-		if !errors.IsNotFound(err) {
-			t.Fatalf("unexpected error: %s", err)
-		}
-	}
-}
-
-func TestAddPDBs(t *testing.T) {
-	labels := map[string]string{"foo": "bar"}
-	notFoundLabels := map[string]string{"bar": "foo"}
-	pdbs := []*pv1beta1.PodDisruptionBudget{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:   "pdb-1",
-				Labels: ownerLabels,
-			},
-			Spec: pv1beta1.PodDisruptionBudgetSpec{
-				Selector: &metav1.LabelSelector{
-					MatchLabels: labels,
-				},
-			},
-		},
-	}
-
-	noReplicas := int32(0)
-	replicas := int32(2)
-
-	deployments := []*appsv1.Deployment{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        "deployment-1",
-				Labels:      labels,
-				Annotations: make(map[string]string),
-			},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: &noReplicas,
-				Selector: &metav1.LabelSelector{
-					MatchLabels: labels,
-				},
-				Template: v1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: labels,
-					},
-				},
-			},
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        "deployment-2",
-				Labels:      notFoundLabels,
-				Annotations: make(map[string]string),
-			},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: &replicas,
-				Selector: &metav1.LabelSelector{
-					MatchLabels: notFoundLabels,
-				},
-				Template: v1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: notFoundLabels,
-					},
-				},
-			},
-			Status: appsv1.DeploymentStatus{
-				ReadyReplicas: replicas,
-			},
-		},
-	}
-
-	statefulSets := []*appsv1.StatefulSet{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        "stateful-set-1",
-				Labels:      labels,
-				Annotations: make(map[string]string),
-			},
-			Spec: appsv1.StatefulSetSpec{
-				Replicas: &noReplicas,
-				Selector: &metav1.LabelSelector{
-					MatchLabels: labels,
-				},
-				Template: v1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: labels,
-					},
-				},
-			},
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        "stateful-set-2",
-				Labels:      labels,
-				Annotations: make(map[string]string),
-			},
-			Spec: appsv1.StatefulSetSpec{
-				Replicas: &replicas,
-				Selector: &metav1.LabelSelector{
-					MatchLabels: notFoundLabels,
-				},
-				Template: v1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: notFoundLabels,
-					},
-				},
-			},
-			Status: appsv1.StatefulSetStatus{
-				ReadyReplicas: replicas,
-			},
-		},
-	}
-
-	namespaces := []*v1.Namespace{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "default",
-			},
-		},
-	}
-
-	controller := NewPDBController(
-		0,
-		setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
-		"-pdb-controller",
-		0,
-	)
-
-	err := controller.addPDBs(namespaces[0])
-	if err != nil {
-		t.Error(err)
-	}
-
-	allPDBs, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").List(metav1.ListOptions{})
-	require.NoError(t, err)
-	require.Len(t, allPDBs.Items, 3) // expect to add two new PDBs
-}
-
-func TestGetPDBs(t *testing.T) {
-	labels := map[string]string{"k": "v"}
-	pdbs := []pv1beta1.PodDisruptionBudget{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Labels: labels,
-			},
-			Spec: pv1beta1.PodDisruptionBudgetSpec{
-				Selector: &metav1.LabelSelector{
-					MatchLabels: labels,
-				},
-			},
-		},
-	}
-
-	matchedPDBs := getPDBs(labels, pdbs, nil)
-	if len(matchedPDBs) == 0 {
-		t.Errorf("expected to get matching PDB")
-	}
-
-	matchedPDBs = getPDBs(labels, pdbs, labels)
-	if len(matchedPDBs) == 0 {
-		t.Errorf("expected to get matching PDB")
-	}
-
-	matchedPDBs = getPDBs(nil, pdbs, labels)
-	if len(matchedPDBs) != 0 {
-		t.Errorf("did not expect to find matching PDB")
-	}
 }
 
 func TestContainLabels(t *testing.T) {
@@ -541,6 +251,7 @@ func TestController(tt *testing.T) {
 		pdbDeploymentSelector  map[string]string
 		pdbStatefulSetSelector map[string]string
 		addtionalPDBs          []*pv1beta1.PodDisruptionBudget
+		overridePDBs           []*pv1beta1.PodDisruptionBudget
 	}{
 		{
 			msg:           "drop pdb when nonReadyTTL is exceeded",
@@ -578,6 +289,14 @@ func TestController(tt *testing.T) {
 			msg:           "keep pdb when replicas are ready",
 			replicas:      3,
 			readyReplicas: 3,
+			nonReadyTTL:   "",
+			lastReadyTime: 0,
+			pdbExists:     true,
+		},
+		{
+			msg:           "keep pdb when first observed not-ready and TTL not exceeded",
+			replicas:      3,
+			readyReplicas: 0,
 			nonReadyTTL:   "",
 			lastReadyTime: 0,
 			pdbExists:     true,
@@ -634,6 +353,15 @@ func TestController(tt *testing.T) {
 			lastReadyTime: 0,
 			pdbExists:     false,
 		},
+		{
+			msg:           "add PDB is none exists",
+			replicas:      2,
+			readyReplicas: 2,
+			nonReadyTTL:   "",
+			lastReadyTime: 0,
+			pdbExists:     true,
+			overridePDBs:  []*pv1beta1.PodDisruptionBudget{},
+		},
 	} {
 		tt.Run(tc.msg, func(t *testing.T) {
 			deploymentSelector := map[string]string{"type": "deployment"}
@@ -650,7 +378,7 @@ func TestController(tt *testing.T) {
 
 			pdbs := []*pv1beta1.PodDisruptionBudget{
 				makePDB(
-					"deployment-pdb",
+					"deployment-x-pdb-controller",
 					pdbDeploymentSelector,
 					[]metav1.OwnerReference{
 						{
@@ -663,7 +391,7 @@ func TestController(tt *testing.T) {
 					tc.lastReadyTime,
 				),
 				makePDB(
-					"statefulset-pdb",
+					"statefulset-x-pdb-controller",
 					pdbStatefulSetSelector,
 					[]metav1.OwnerReference{
 						{
@@ -679,6 +407,11 @@ func TestController(tt *testing.T) {
 			if len(tc.addtionalPDBs) > 0 {
 				pdbs = append(pdbs, tc.addtionalPDBs...)
 			}
+
+			if tc.overridePDBs != nil {
+				pdbs = tc.overridePDBs
+			}
+
 			deployments := []*appsv1.Deployment{
 				makeDeployment(
 					"deployment-x",
@@ -705,9 +438,12 @@ func TestController(tt *testing.T) {
 				},
 			}
 
-			controller := &PDBController{
-				Interface: setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces), nonReadyTTL: time.Hour,
-			}
+			controller := NewPDBController(
+				0,
+				setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
+				"pdb-controller",
+				time.Hour,
+			)
 
 			err := controller.runOnce()
 			if err != nil {
@@ -715,7 +451,7 @@ func TestController(tt *testing.T) {
 			}
 
 			// deployment
-			pdb, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("deployment-pdb", metav1.GetOptions{})
+			pdb, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("deployment-x-pdb-controller", metav1.GetOptions{})
 			if tc.pdbExists {
 				require.NoError(t, err)
 				require.Equal(t, pdb.Spec.Selector.MatchLabels, deploymentSelector)
@@ -725,7 +461,7 @@ func TestController(tt *testing.T) {
 			}
 
 			// statefulset
-			pdb, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("statefulset-pdb", metav1.GetOptions{})
+			pdb, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("statefulset-x-pdb-controller", metav1.GetOptions{})
 			if tc.pdbExists {
 				require.NoError(t, err)
 				require.Equal(t, pdb.Spec.Selector.MatchLabels, statefulSetSelector)

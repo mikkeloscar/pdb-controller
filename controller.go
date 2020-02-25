@@ -190,7 +190,7 @@ func (n *PDBController) reconcilePDBs(desiredPDBs, managedPDBs map[string]pv1bet
 		if !ok {
 			err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Delete(managedPDB.Name, nil)
 			if err != nil {
-				log.Error(err)
+				log.Errorf("Failed to delete PDB: %v", err)
 				continue
 			}
 
@@ -203,10 +203,16 @@ func (n *PDBController) reconcilePDBs(desiredPDBs, managedPDBs map[string]pv1bet
 		}
 
 		// check if PDBs are equal an only update if not
-		if !equality.Semantic.DeepEqual(managedPDB, desiredPDB) {
-			_, err := n.PolicyV1beta1().PodDisruptionBudgets(desiredPDB.Namespace).Update(&desiredPDB)
+		if !equality.Semantic.DeepEqual(managedPDB.Spec, desiredPDB.Spec) ||
+			!equality.Semantic.DeepEqual(managedPDB.Labels, desiredPDB.Labels) ||
+			!equality.Semantic.DeepEqual(managedPDB.Annotations, desiredPDB.Annotations) {
+			managedPDB.Annotations = desiredPDB.Annotations
+			managedPDB.Labels = desiredPDB.Labels
+			managedPDB.Spec = desiredPDB.Spec
+
+			_, err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Update(&managedPDB)
 			if err != nil {
-				log.Error(err)
+				log.Errorf("Failed to update PDB: %v", err)
 				continue
 			}
 
@@ -223,7 +229,7 @@ func (n *PDBController) reconcilePDBs(desiredPDBs, managedPDBs map[string]pv1bet
 		if _, ok := managedPDBs[key]; !ok {
 			_, err := n.PolicyV1beta1().PodDisruptionBudgets(desiredPDB.Namespace).Create(&desiredPDB)
 			if err != nil {
-				log.Error(err)
+				log.Errorf("Failed to create PDB: %v", err)
 				continue
 			}
 

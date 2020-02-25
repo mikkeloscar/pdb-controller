@@ -1,13 +1,12 @@
 package main
 
 import (
-	"fmt"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	pv1beta1 "k8s.io/api/policy/v1beta1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
@@ -34,32 +33,13 @@ type PDBController struct {
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration) (*PDBController, error) {
-	controller := &PDBController{
+func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration) *PDBController {
+	return &PDBController{
 		Interface:     client,
 		interval:      interval,
 		pdbNameSuffix: pdbNameSuffix,
 		nonReadyTTL:   nonReadyTTL,
 	}
-
-	return controller, nil
-}
-
-func (n *PDBController) runOnce() error {
-	namespaces, err := n.CoreV1().Namespaces().List(metav1.ListOptions{})
-	if err != nil {
-		return err
-	}
-
-	for _, ns := range namespaces.Items {
-		err = n.addPDBs(&ns)
-		if err != nil {
-			log.Error(err)
-			continue
-		}
-	}
-
-	return nil
 }
 
 // Run runs the controller loop until it receives a stop signal over the stop
@@ -81,33 +61,26 @@ func (n *PDBController) Run(stopChan <-chan struct{}) {
 	}
 }
 
-// addPDBs adds PodDisruptionBudgets for deployments and statefulsets in a
-// given namespace. A PodDisruptionBudget is only added if there is none
-// defined already for the deployment or statefulset.
-func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
-	pdbs, err := n.PolicyV1beta1().PodDisruptionBudgets(namespace.Name).List(metav1.ListOptions{})
+// runOnce runs the main reconcilation loop of the controller.
+func (n *PDBController) runOnce() error {
+	allPDBs, err := n.PolicyV1beta1().PodDisruptionBudgets(v1.NamespaceAll).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 
-	deployments, err := n.AppsV1().Deployments(namespace.Name).List(metav1.ListOptions{})
+	managedPDBs, unmanagedPDBs := filterPDBs(allPDBs.Items)
+
+	deployments, err := n.AppsV1().Deployments(v1.NamespaceAll).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 
-	statefulSets, err := n.AppsV1().StatefulSets(namespace.Name).List(metav1.ListOptions{})
+	statefulSets, err := n.AppsV1().StatefulSets(v1.NamespaceAll).List(metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 
 	resources := make([]kubeResource, 0, len(deployments.Items)+len(statefulSets.Items))
-	addPDB := make([]kubeResource, 0, len(deployments.Items)+len(statefulSets.Items))
-	removePDB := make([]pv1beta1.PodDisruptionBudget, 0, len(deployments.Items)+len(statefulSets.Items))
-
-	nonReadyTTL := time.Time{}
-	if n.nonReadyTTL > 0 {
-		nonReadyTTL = time.Now().UTC().Add(-n.nonReadyTTL)
-	}
 
 	for _, d := range deployments.Items {
 		// manually set Kind and APIVersion because of a bug in
@@ -127,172 +100,147 @@ func (n *PDBController) addPDBs(namespace *v1.Namespace) error {
 		resources = append(resources, statefulSet{s})
 	}
 
-	for _, resource := range resources {
-		matchedPDBs := getPDBs(resource.TemplateLabels(), pdbs.Items, nil)
-
-		// if no PDB exist for the deployment and all replicas are
-		// ready, add one
-		if resource.StatusReadyReplicas() == resource.Replicas() {
-			if len(matchedPDBs) == 0 && resource.Replicas() > 1 {
-				addPDB = append(addPDB, resource)
-			}
-		}
-
-		// for resources with only one replica, check if we previously
-		// created PDBs and remove them.
-		ownedPDBs := getOwnedPDBs(matchedPDBs, resource)
-
-		if len(ownedPDBs) > 0 && resource.Replicas() <= 1 {
-			removePDB = append(removePDB, ownedPDBs...)
-			continue
-		}
-
-		// if there are owned PDBs and a non-owned PDBs remove the
-		// owned PDBs to not shadow what's defined by users.
-		if len(ownedPDBs) != len(matchedPDBs) {
-			removePDB = append(removePDB, ownedPDBs...)
-			continue
-		}
-
-		validPDBs := make([]pv1beta1.PodDisruptionBudget, 0, len(ownedPDBs))
-		// remove PDBs that are no longer valid, they'll be recreated on the next iteration
-		for _, pdb := range ownedPDBs {
-			if !pdbSpecValid(pdb) {
-				removePDB = append(removePDB, pdb)
-			}
-			validPDBs = append(validPDBs, pdb)
-		}
-
-		if len(validPDBs) != 1 {
-			continue
-		}
-		pdb := &validPDBs[0]
-		if pdb.Annotations == nil {
-			pdb.Annotations = make(map[string]string)
-		}
-
-		ttl, err := overrideNonReadyTTL(resource.Annotations(), nonReadyTTL)
-		if err != nil {
-			log.Errorf("Failed to override PDB Delete TTL: %s", err)
-		}
-
-		var nonReadySince time.Time
-		if nonReadySinceStr, ok := pdb.Annotations[nonReadySinceAnnotationName]; ok {
-			nonReadySince, err = time.Parse(time.RFC3339, nonReadySinceStr)
-			if err != nil {
-				log.Errorf("Failed to parse non-ready-since annotation '%s': %v", nonReadySinceStr, err)
-			}
-		}
-
-		if !nonReadySince.IsZero() {
-			if resource.StatusReadyReplicas() >= resource.Replicas() {
-				delete(pdb.Annotations, nonReadySinceAnnotationName)
-			} else {
-				if !ttl.IsZero() && len(ownedPDBs) > 0 && nonReadySince.Before(ttl) {
-					removePDB = append(removePDB, ownedPDBs...)
-				}
-				continue
-			}
-		} else {
-			if resource.StatusReadyReplicas() >= resource.Replicas() {
-				continue
-			}
-			pdb.Annotations[nonReadySinceAnnotationName] = time.Now().UTC().Format(time.RFC3339)
-		}
-
-		if !cmp.Equal(resource.Selector(), pdb.Spec.Selector) {
-			pdb.Spec.Selector = resource.Selector()
-		}
-
-		_, err = n.PolicyV1beta1().PodDisruptionBudgets(namespace.Name).Update(pdb)
-		if err != nil {
-			log.Errorf("Failed to update PDB '%s/%s': %v", pdb.Namespace, pdb.Name, err)
-		}
-	}
-
-	// add missing PDBs
-	for _, resource := range addPDB {
-		maxUnavailable := intstr.FromInt(1)
-		pdb := &pv1beta1.PodDisruptionBudget{
-			Spec: pv1beta1.PodDisruptionBudgetSpec{
-				MaxUnavailable: &maxUnavailable,
-			},
-		}
-
-		switch r := resource.(type) {
-		case deployment:
-			if r.Labels == nil {
-				r.Labels = make(map[string]string)
-			}
-			labels := r.Labels
-			labels[heritageLabel] = pdbController
-			pdb.Name = r.Name()
-			pdb.Namespace = r.Namespace
-			pdb.OwnerReferences = []metav1.OwnerReference{
-				{
-					APIVersion: "apps/v1",
-					Kind:       "Deployment",
-					Name:       r.Name(),
-					UID:        r.UID(),
-				},
-			}
-			pdb.Labels = labels
-			pdb.Spec.Selector = r.Selector()
-		case statefulSet:
-			if r.Labels == nil {
-				r.Labels = make(map[string]string)
-			}
-			labels := r.Labels
-			labels[heritageLabel] = pdbController
-			pdb.Name = r.Name()
-			pdb.Namespace = r.Namespace
-			pdb.OwnerReferences = []metav1.OwnerReference{
-				{
-					APIVersion: "apps/v1",
-					Kind:       "StatefulSet",
-					Name:       r.Name(),
-					UID:        r.UID(),
-				},
-			}
-			pdb.Labels = labels
-			pdb.Spec.Selector = r.Selector()
-		}
-
-		if n.pdbNameSuffix != "" {
-			pdb.Name = fmt.Sprintf("%s-%s", pdb.Name, n.pdbNameSuffix)
-		}
-
-		_, err := n.PolicyV1beta1().PodDisruptionBudgets(pdb.Namespace).Create(pdb)
-		if err != nil {
-			log.Error(err)
-			continue
-		}
-
-		log.WithFields(log.Fields{
-			"action":    "added",
-			"pdb":       pdb.Name,
-			"namespace": pdb.Namespace,
-			"selector":  pdb.Spec.Selector.String(),
-		}).Info("")
-	}
-
-	// remove obsolete PDBs
-	for _, pdb := range removePDB {
-		err := n.PolicyV1beta1().PodDisruptionBudgets(pdb.Namespace).Delete(pdb.Name, nil)
-		if err != nil {
-			log.Error(err)
-			continue
-		}
-
-		log.WithFields(log.Fields{
-			"action":    "removed",
-			"pdb":       pdb.Name,
-			"namespace": pdb.Namespace,
-			"selector":  pdb.Spec.Selector.String(),
-		}).Info("")
-	}
-
+	desiredPDBs := n.generateDesiredPDBs(resources, managedPDBs, unmanagedPDBs)
+	n.reconcilePDBs(desiredPDBs, managedPDBs)
 	return nil
+}
+
+func (n *PDBController) generateDesiredPDBs(resources []kubeResource, managedPDBs, unmanagedPDBs map[string]pv1beta1.PodDisruptionBudget) map[string]pv1beta1.PodDisruptionBudget {
+	desiredPDBs := make(map[string]pv1beta1.PodDisruptionBudget, len(managedPDBs))
+
+	nonReadyTTL := time.Time{}
+	if n.nonReadyTTL > 0 {
+		nonReadyTTL = time.Now().UTC().Add(-n.nonReadyTTL)
+	}
+
+	for _, resource := range resources {
+		matchedPDBs := getMatchedPDBs(resource.TemplateLabels(), unmanagedPDBs)
+
+		// don't create managed PDB if there is already unmanaged and
+		// matched PDBs
+		if len(matchedPDBs) > 0 {
+			continue
+		}
+
+		// don't create PDB if the resource has 1 or less replicas
+		if resource.Replicas() <= 1 {
+			continue
+		}
+
+		// ensure PDB if the resource has more than one replica and all
+		// of them are ready
+		if resource.StatusReadyReplicas() >= resource.Replicas() {
+			pdb := n.generatePDB(resource, time.Time{})
+			desiredPDBs[pdb.Namespace+"/"+pdb.Name] = pdb
+			continue
+		}
+
+		ownedPDBs := getOwnedPDBs(managedPDBs, resource)
+		validPDBs := make([]pv1beta1.PodDisruptionBudget, 0, len(ownedPDBs))
+		// only consider valid PDBs. If they're invalid they'll be
+		// recreated on the next iteration
+		for _, pdb := range ownedPDBs {
+			if pdbSpecValid(pdb) {
+				validPDBs = append(validPDBs, pdb)
+			}
+		}
+
+		if len(validPDBs) > 0 {
+			// it's unlikely that we will have more than a single
+			// valid owned PDB. If we do simply pick the first one
+			// and check if it's still valid. Any other PDBs will
+			// automatically get dropped.
+			pdb := validPDBs[0]
+			if pdb.Annotations == nil {
+				pdb.Annotations = make(map[string]string)
+			}
+
+			ttl, err := overrideNonReadyTTL(resource.Annotations(), nonReadyTTL)
+			if err != nil {
+				log.Errorf("Failed to override PDB Delete TTL: %s", err)
+			}
+
+			var nonReadySince time.Time
+			if nonReadySinceStr, ok := pdb.Annotations[nonReadySinceAnnotationName]; ok {
+				nonReadySince, err = time.Parse(time.RFC3339, nonReadySinceStr)
+				if err != nil {
+					log.Errorf("Failed to parse non-ready-since annotation '%s': %v", nonReadySinceStr, err)
+				}
+			}
+
+			if !nonReadySince.IsZero() {
+				if !ttl.IsZero() && nonReadySince.Before(ttl) {
+					continue
+				}
+			} else {
+				nonReadySince = time.Now().UTC()
+			}
+
+			generatedPDB := n.generatePDB(resource, nonReadySince)
+			desiredPDBs[generatedPDB.Namespace+"/"+generatedPDB.Name] = generatedPDB
+		}
+	}
+
+	return desiredPDBs
+}
+
+func (n *PDBController) reconcilePDBs(desiredPDBs, managedPDBs map[string]pv1beta1.PodDisruptionBudget) {
+	for key, managedPDB := range managedPDBs {
+		desiredPDB, ok := desiredPDBs[key]
+		if !ok {
+			err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Delete(managedPDB.Name, nil)
+			if err != nil {
+				log.Errorf("Failed to delete PDB: %v", err)
+				continue
+			}
+
+			log.WithFields(log.Fields{
+				"action":    "removed",
+				"pdb":       managedPDB.Name,
+				"namespace": managedPDB.Namespace,
+				"selector":  managedPDB.Spec.Selector.String(),
+			}).Info("")
+		}
+
+		// check if PDBs are equal an only update if not
+		if !equality.Semantic.DeepEqual(managedPDB.Spec, desiredPDB.Spec) ||
+			!equality.Semantic.DeepEqual(managedPDB.Labels, desiredPDB.Labels) ||
+			!equality.Semantic.DeepEqual(managedPDB.Annotations, desiredPDB.Annotations) {
+			managedPDB.Annotations = desiredPDB.Annotations
+			managedPDB.Labels = desiredPDB.Labels
+			managedPDB.Spec = desiredPDB.Spec
+
+			_, err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Update(&managedPDB)
+			if err != nil {
+				log.Errorf("Failed to update PDB: %v", err)
+				continue
+			}
+
+			log.WithFields(log.Fields{
+				"action":    "updated",
+				"pdb":       desiredPDB.Name,
+				"namespace": desiredPDB.Namespace,
+				"selector":  desiredPDB.Spec.Selector.String(),
+			}).Info("")
+		}
+	}
+
+	for key, desiredPDB := range desiredPDBs {
+		if _, ok := managedPDBs[key]; !ok {
+			_, err := n.PolicyV1beta1().PodDisruptionBudgets(desiredPDB.Namespace).Create(&desiredPDB)
+			if err != nil {
+				log.Errorf("Failed to create PDB: %v", err)
+				continue
+			}
+
+			log.WithFields(log.Fields{
+				"action":    "added",
+				"pdb":       desiredPDB.Name,
+				"namespace": desiredPDB.Namespace,
+				"selector":  desiredPDB.Spec.Selector.String(),
+			}).Info("")
+		}
+	}
 }
 
 func overrideNonReadyTTL(annotations map[string]string, nonReadyTTL time.Time) (time.Time, error) {
@@ -311,18 +259,18 @@ func pdbSpecValid(pdb pv1beta1.PodDisruptionBudget) bool {
 	return pdb.Spec.MinAvailable == nil
 }
 
-// getPDBs gets matching PodDisruptionBudgets.
-func getPDBs(labels map[string]string, pdbs []pv1beta1.PodDisruptionBudget, selector map[string]string) []pv1beta1.PodDisruptionBudget {
+// getMatchedPDBs gets matching PodDisruptionBudgets.
+func getMatchedPDBs(labels map[string]string, pdbs map[string]pv1beta1.PodDisruptionBudget) []pv1beta1.PodDisruptionBudget {
 	matchedPDBs := make([]pv1beta1.PodDisruptionBudget, 0)
 	for _, pdb := range pdbs {
-		if labelsIntersect(labels, pdb.Spec.Selector.MatchLabels) && containLabels(pdb.Labels, selector) {
+		if labelsIntersect(labels, pdb.Spec.Selector.MatchLabels) {
 			matchedPDBs = append(matchedPDBs, pdb)
 		}
 	}
 	return matchedPDBs
 }
 
-func getOwnedPDBs(pdbs []pv1beta1.PodDisruptionBudget, owner kubeResource) []pv1beta1.PodDisruptionBudget {
+func getOwnedPDBs(pdbs map[string]pv1beta1.PodDisruptionBudget, owner kubeResource) []pv1beta1.PodDisruptionBudget {
 	ownedPDBs := make([]pv1beta1.PodDisruptionBudget, 0, len(pdbs))
 	for _, pdb := range pdbs {
 		if isOwnedReference(owner, pdb.ObjectMeta) {
@@ -373,4 +321,56 @@ func labelsIntersect(a, b map[string]string) bool {
 	}
 
 	return intersect
+}
+
+func filterPDBs(pdbs []pv1beta1.PodDisruptionBudget) (map[string]pv1beta1.PodDisruptionBudget, map[string]pv1beta1.PodDisruptionBudget) {
+	managed := make(map[string]pv1beta1.PodDisruptionBudget, len(pdbs))
+	unmanaged := make(map[string]pv1beta1.PodDisruptionBudget, len(pdbs))
+	for _, pdb := range pdbs {
+		if containLabels(pdb.Labels, ownerLabels) {
+			managed[pdb.Namespace+"/"+pdb.Name] = pdb
+			continue
+		}
+		unmanaged[pdb.Namespace+"/"+pdb.Name] = pdb
+	}
+	return managed, unmanaged
+}
+
+func (n *PDBController) generatePDB(owner kubeResource, ttl time.Time) pv1beta1.PodDisruptionBudget {
+	var suffix string
+	if n.pdbNameSuffix != "" {
+		suffix = "-" + n.pdbNameSuffix
+	}
+
+	maxUnavailable := intstr.FromInt(1)
+	pdb := pv1beta1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      owner.Name() + suffix,
+			Namespace: owner.Namespace(),
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: owner.APIVersion(),
+					Kind:       owner.Kind(),
+					Name:       owner.Name(),
+					UID:        owner.UID(),
+				},
+			},
+			Labels:      owner.Labels(),
+			Annotations: make(map[string]string),
+		},
+		Spec: pv1beta1.PodDisruptionBudgetSpec{
+			MaxUnavailable: &maxUnavailable,
+			Selector:       owner.Selector(),
+		},
+	}
+
+	if pdb.Labels == nil {
+		pdb.Labels = make(map[string]string)
+	}
+	pdb.Labels[heritageLabel] = pdbController
+
+	if !ttl.IsZero() {
+		pdb.Annotations[nonReadySinceAnnotationName] = ttl.Format(time.RFC3339)
+	}
+	return pdb
 }

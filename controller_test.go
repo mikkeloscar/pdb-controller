@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -73,7 +74,6 @@ func TestRunOnce(t *testing.T) {
 }
 
 func TestRun(t *testing.T) {
-	stopCh := make(chan struct{}, 1)
 	namespaces := []*v1.Namespace{
 		{
 			ObjectMeta: metav1.ObjectMeta{
@@ -86,8 +86,9 @@ func TestRun(t *testing.T) {
 		Interface: setupMockKubernetes(t, nil, nil, nil, namespaces),
 	}
 
-	go controller.Run(stopCh)
-	stopCh <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	go controller.Run(ctx)
+	cancel()
 }
 
 func TestContainLabels(t *testing.T) {
@@ -241,6 +242,10 @@ func makeStatefulset(name string, selector map[string]string, replicas, readyRep
 }
 
 func TestController(tt *testing.T) {
+	deployHash, err := resourceHash("Deployment", "deployment-x")
+	require.NoError(tt, err)
+	statefulHash, err := resourceHash("StatefulSet", "statefulset-x")
+	require.NoError(tt, err)
 	for _, tc := range []struct {
 		msg                    string
 		replicas               int32
@@ -252,6 +257,7 @@ func TestController(tt *testing.T) {
 		pdbStatefulSetSelector map[string]string
 		addtionalPDBs          []*pv1beta1.PodDisruptionBudget
 		overridePDBs           []*pv1beta1.PodDisruptionBudget
+		parentResourceHash     bool
 	}{
 		{
 			msg:           "drop pdb when nonReadyTTL is exceeded",
@@ -333,13 +339,19 @@ func TestController(tt *testing.T) {
 			addtionalPDBs: []*pv1beta1.PodDisruptionBudget{
 				makePDB(
 					"custom-deployment-pdb",
-					map[string]string{"type": "deployment"},
+					map[string]string{
+						"type":                  "deployment",
+						parentResourceHashLabel: deployHash,
+					},
 					nil,
 					0,
 				),
 				makePDB(
 					"custom-statefulset-pdb",
-					map[string]string{"type": "statefulset"},
+					map[string]string{
+						"type":                  "statefulset",
+						parentResourceHashLabel: statefulHash,
+					},
 					nil,
 					0,
 				),
@@ -364,110 +376,125 @@ func TestController(tt *testing.T) {
 		},
 	} {
 		tt.Run(tc.msg, func(t *testing.T) {
-			deploymentSelector := map[string]string{"type": "deployment"}
-			statefulSetSelector := map[string]string{"type": "statefulset"}
+			// Run both with and without parent-resource-hash
+			// support enabled.
+			for _, parentResourceHash := range []bool{true, false} {
+				deploymentSelector := map[string]string{"type": "deployment"}
+				statefulSetSelector := map[string]string{"type": "statefulset"}
 
-			pdbDeploymentSelector := deploymentSelector
-			pdbStatefulSetSelector := statefulSetSelector
-			if tc.pdbDeploymentSelector != nil {
-				pdbDeploymentSelector = tc.pdbDeploymentSelector
-			}
-			if tc.pdbStatefulSetSelector != nil {
-				pdbStatefulSetSelector = tc.pdbStatefulSetSelector
-			}
+				if parentResourceHash {
+					deploymentSelector = map[string]string{
+						parentResourceHashLabel: deployHash,
+					}
 
-			pdbs := []*pv1beta1.PodDisruptionBudget{
-				makePDB(
-					"deployment-x-pdb-controller",
-					pdbDeploymentSelector,
-					[]metav1.OwnerReference{
-						{
-							APIVersion: "apps/v1",
-							Kind:       "Deployment",
-							Name:       "deployment-x",
-							UID:        types.UID("deployment-uid-deployment-x"),
+					statefulSetSelector = map[string]string{
+						parentResourceHashLabel: statefulHash,
+					}
+				}
+
+				pdbDeploymentSelector := deploymentSelector
+				pdbStatefulSetSelector := statefulSetSelector
+				if tc.pdbDeploymentSelector != nil {
+					pdbDeploymentSelector = tc.pdbDeploymentSelector
+				}
+				if tc.pdbStatefulSetSelector != nil {
+					pdbStatefulSetSelector = tc.pdbStatefulSetSelector
+				}
+
+				pdbs := []*pv1beta1.PodDisruptionBudget{
+					makePDB(
+						"deployment-x-pdb-controller",
+						pdbDeploymentSelector,
+						[]metav1.OwnerReference{
+							{
+								APIVersion: "apps/v1",
+								Kind:       "Deployment",
+								Name:       "deployment-x",
+								UID:        types.UID("deployment-uid-deployment-x"),
+							},
+						},
+						tc.lastReadyTime,
+					),
+					makePDB(
+						"statefulset-x-pdb-controller",
+						pdbStatefulSetSelector,
+						[]metav1.OwnerReference{
+							{
+								APIVersion: "apps/v1",
+								Kind:       "StatefulSet",
+								Name:       "statefulset-x",
+								UID:        types.UID("statefulset-uid-statefulset-x"),
+							},
+						},
+						tc.lastReadyTime,
+					),
+				}
+				if len(tc.addtionalPDBs) > 0 {
+					pdbs = append(pdbs, tc.addtionalPDBs...)
+				}
+
+				if tc.overridePDBs != nil {
+					pdbs = tc.overridePDBs
+				}
+
+				deployments := []*appsv1.Deployment{
+					makeDeployment(
+						"deployment-x",
+						deploymentSelector,
+						tc.replicas,
+						tc.readyReplicas,
+						tc.nonReadyTTL,
+					),
+				}
+				statefulSets := []*appsv1.StatefulSet{
+					makeStatefulset(
+						"statefulset-x",
+						statefulSetSelector,
+						tc.replicas,
+						tc.readyReplicas,
+						tc.nonReadyTTL,
+					),
+				}
+				namespaces := []*v1.Namespace{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "default",
 						},
 					},
-					tc.lastReadyTime,
-				),
-				makePDB(
-					"statefulset-x-pdb-controller",
-					pdbStatefulSetSelector,
-					[]metav1.OwnerReference{
-						{
-							APIVersion: "apps/v1",
-							Kind:       "StatefulSet",
-							Name:       "statefulset-x",
-							UID:        types.UID("statefulset-uid-statefulset-x"),
-						},
-					},
-					tc.lastReadyTime,
-				),
-			}
-			if len(tc.addtionalPDBs) > 0 {
-				pdbs = append(pdbs, tc.addtionalPDBs...)
-			}
+				}
 
-			if tc.overridePDBs != nil {
-				pdbs = tc.overridePDBs
-			}
+				controller := NewPDBController(
+					0,
+					setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
+					"pdb-controller",
+					time.Hour,
+					parentResourceHash,
+				)
 
-			deployments := []*appsv1.Deployment{
-				makeDeployment(
-					"deployment-x",
-					deploymentSelector,
-					tc.replicas,
-					tc.readyReplicas,
-					tc.nonReadyTTL,
-				),
-			}
-			statefulSets := []*appsv1.StatefulSet{
-				makeStatefulset(
-					"statefulset-x",
-					statefulSetSelector,
-					tc.replicas,
-					tc.readyReplicas,
-					tc.nonReadyTTL,
-				),
-			}
-			namespaces := []*v1.Namespace{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "default",
-					},
-				},
-			}
+				err := controller.runOnce()
+				if err != nil {
+					t.Errorf("controller failed to run: %s", err)
+				}
 
-			controller := NewPDBController(
-				0,
-				setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
-				"pdb-controller",
-				time.Hour,
-			)
+				// deployment
+				pdb, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("deployment-x-pdb-controller", metav1.GetOptions{})
+				if tc.pdbExists {
+					require.NoError(t, err)
+					require.Equal(t, pdb.Spec.Selector.MatchLabels, deploymentSelector)
+				} else {
+					require.Error(t, err)
+					require.True(t, errors.IsNotFound(err))
+				}
 
-			err := controller.runOnce()
-			if err != nil {
-				t.Errorf("controller failed to run: %s", err)
-			}
-
-			// deployment
-			pdb, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("deployment-x-pdb-controller", metav1.GetOptions{})
-			if tc.pdbExists {
-				require.NoError(t, err)
-				require.Equal(t, pdb.Spec.Selector.MatchLabels, deploymentSelector)
-			} else {
-				require.Error(t, err)
-				require.True(t, errors.IsNotFound(err))
-			}
-
-			// statefulset
-			pdb, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("statefulset-x-pdb-controller", metav1.GetOptions{})
-			if tc.pdbExists {
-				require.NoError(t, err)
-				require.Equal(t, pdb.Spec.Selector.MatchLabels, statefulSetSelector)
-			} else {
-				require.Error(t, err)
-				require.True(t, errors.IsNotFound(err))
+				// statefulset
+				pdb, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("statefulset-x-pdb-controller", metav1.GetOptions{})
+				if tc.pdbExists {
+					require.NoError(t, err)
+					require.Equal(t, pdb.Spec.Selector.MatchLabels, statefulSetSelector)
+				} else {
+					require.Error(t, err)
+					require.True(t, errors.IsNotFound(err))
+				}
 			}
 		})
 	}

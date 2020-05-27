@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/url"
 	"os"
 	"os/signal"
@@ -21,11 +22,12 @@ const (
 )
 
 type config struct {
-	Interval      time.Duration
-	APIServer     *url.URL
-	Debug         bool
-	PDBNameSuffix string
-	NonReadyTTL   time.Duration
+	Interval           time.Duration
+	APIServer          *url.URL
+	Debug              bool
+	PDBNameSuffix      string
+	NonReadyTTL        time.Duration
+	ParentResourceHash bool
 }
 
 func main() {
@@ -35,6 +37,7 @@ func main() {
 	kingpin.Flag("debug", "Enable debug logging.").BoolVar(&config.Debug)
 	kingpin.Flag("pdb-name-suffix", "Specify default PDB name suffix.").Default(defaultPDBNameSuffix).StringVar(&config.PDBNameSuffix)
 	kingpin.Flag("non-ready-ttl", "Set the ttl for when to remove the managed PDB if the deployment/statefulset is unhealthy (default: disabled).").Default(defaultNonReadyTTL).DurationVar(&config.NonReadyTTL)
+	kingpin.Flag("use-parent-resource-hash", "Uses parent-resource-hash labels as selector for PDBs.").BoolVar(&config.ParentResourceHash)
 	kingpin.Parse()
 
 	if config.Debug {
@@ -60,18 +63,24 @@ func main() {
 		log.Fatal(err)
 	}
 
-	controller := NewPDBController(config.Interval, client, config.PDBNameSuffix, config.NonReadyTTL)
+	controller := NewPDBController(
+		config.Interval,
+		client,
+		config.PDBNameSuffix,
+		config.NonReadyTTL,
+		config.ParentResourceHash,
+	)
 
-	stopChan := make(chan struct{}, 1)
-	go handleSigterm(stopChan)
+	ctx, cancel := context.WithCancel(context.Background())
+	go handleSigterm(cancel)
 
-	controller.Run(stopChan)
+	controller.Run(ctx)
 }
 
-func handleSigterm(stopChan chan struct{}) {
+func handleSigterm(cancelFunc func()) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM)
 	<-signals
 	log.Info("Received Term signal. Terminating...")
-	close(stopChan)
+	cancelFunc()
 }

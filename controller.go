@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -17,6 +20,7 @@ const (
 	pdbController               = "pdb-controller"
 	nonReadyTTLAnnotationName   = "pdb-controller.zalando.org/non-ready-ttl"
 	nonReadySinceAnnotationName = "pdb-controller.zalando.org/non-ready-since"
+	parentResourceHashLabel     = "parent-resource-hash"
 )
 
 var (
@@ -27,24 +31,26 @@ var (
 // if missing.
 type PDBController struct {
 	kubernetes.Interface
-	interval      time.Duration
-	pdbNameSuffix string
-	nonReadyTTL   time.Duration
+	interval           time.Duration
+	pdbNameSuffix      string
+	nonReadyTTL        time.Duration
+	parentResourceHash bool
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration) *PDBController {
+func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration, parentResourceHash bool) *PDBController {
 	return &PDBController{
-		Interface:     client,
-		interval:      interval,
-		pdbNameSuffix: pdbNameSuffix,
-		nonReadyTTL:   nonReadyTTL,
+		Interface:          client,
+		interval:           interval,
+		pdbNameSuffix:      pdbNameSuffix,
+		nonReadyTTL:        nonReadyTTL,
+		parentResourceHash: parentResourceHash,
 	}
 }
 
 // Run runs the controller loop until it receives a stop signal over the stop
 // channel.
-func (n *PDBController) Run(stopChan <-chan struct{}) {
+func (n *PDBController) Run(ctx context.Context) {
 	for {
 		log.Debug("Running main control loop.")
 		err := n.runOnce()
@@ -54,7 +60,7 @@ func (n *PDBController) Run(stopChan <-chan struct{}) {
 
 		select {
 		case <-time.After(n.interval):
-		case <-stopChan:
+		case <-ctx.Done():
 			log.Info("Terminating main controller loop.")
 			return
 		}
@@ -364,6 +370,19 @@ func (n *PDBController) generatePDB(owner kubeResource, ttl time.Time) pv1beta1.
 		},
 	}
 
+	if n.parentResourceHash {
+		// if we fail to generate the hash simply fall back to using
+		// the existing selector
+		hash, err := resourceHash(owner.Kind(), owner.Name())
+		if err == nil {
+			pdb.Spec.Selector = &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					parentResourceHashLabel: hash,
+				},
+			}
+		}
+	}
+
 	if pdb.Labels == nil {
 		pdb.Labels = make(map[string]string)
 	}
@@ -373,4 +392,13 @@ func (n *PDBController) generatePDB(owner kubeResource, ttl time.Time) pv1beta1.
 		pdb.Annotations[nonReadySinceAnnotationName] = ttl.Format(time.RFC3339)
 	}
 	return pdb
+}
+
+func resourceHash(kind, name string) (string, error) {
+	h := sha1.New()
+	_, err := h.Write([]byte(kind + "-" + name))
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

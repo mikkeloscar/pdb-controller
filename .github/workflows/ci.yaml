@@ -1,25 +1,28 @@
 name: ci
-on: [push]
+on: [push, pull_request]
 jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - uses: actions/setup-go@v2-beta
+    - uses: actions/setup-go@v2
       with:
-        go-version: '^1.15'
-    - run: echo "::add-path::$(go env GOPATH)/bin"
+        go-version: '^1.16'
     - run: go get github.com/mattn/goveralls
-      env:
-        GO111MODULE: off
     - run: curl -sfL https://install.goreleaser.com/github.com/golangci/golangci-lint.sh | sh -s -- -b $(go env GOPATH)/bin ${GOLANGCI_RELEASE}
       env:
-        GOLANGCI_RELEASE: v1.31.0
+        GOLANGCI_RELEASE: v1.39.0
     - run: |
         make test
         make check
         make
+        make build.docker
     - run: goveralls -coverprofile=profile.cov -service=github
       env:
         COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Push the latest Docker image
+      run: |
+        echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+        VERSION=latest make build.push
+      if: github.ref == 'refs/heads/master'

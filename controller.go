@@ -35,16 +35,18 @@ type PDBController struct {
 	pdbNameSuffix      string
 	nonReadyTTL        time.Duration
 	parentResourceHash bool
+	maxUnavailable     intstr.IntOrString
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration, parentResourceHash bool) *PDBController {
+func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration, parentResourceHash bool, maxUnavailable intstr.IntOrString) *PDBController {
 	return &PDBController{
 		Interface:          client,
 		interval:           interval,
 		pdbNameSuffix:      pdbNameSuffix,
 		nonReadyTTL:        nonReadyTTL,
 		parentResourceHash: parentResourceHash,
+		maxUnavailable:     maxUnavailable,
 	}
 }
 
@@ -348,7 +350,6 @@ func (n *PDBController) generatePDB(owner kubeResource, ttl time.Time) pv1beta1.
 		suffix = "-" + n.pdbNameSuffix
 	}
 
-	maxUnavailable := intstr.FromInt(1)
 	pdb := pv1beta1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      owner.Name() + suffix,
@@ -365,7 +366,7 @@ func (n *PDBController) generatePDB(owner kubeResource, ttl time.Time) pv1beta1.
 			Annotations: make(map[string]string),
 		},
 		Spec: pv1beta1.PodDisruptionBudgetSpec{
-			MaxUnavailable: &maxUnavailable,
+			MaxUnavailable: &n.maxUnavailable,
 			Selector:       owner.Selector(),
 		},
 	}

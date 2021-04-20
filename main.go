@@ -8,7 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"gopkg.in/alecthomas/kingpin.v2"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -16,9 +17,10 @@ import (
 )
 
 const (
-	defaultInterval      = "1m"
-	defaultPDBNameSuffix = "pdb-controller"
-	defaultNonReadyTTL   = "0s"
+	defaultInterval       = "1m"
+	defaultPDBNameSuffix  = "pdb-controller"
+	defaultNonReadyTTL    = "0s"
+	defaultMaxUnavailable = "1"
 )
 
 type config struct {
@@ -28,6 +30,7 @@ type config struct {
 	PDBNameSuffix      string
 	NonReadyTTL        time.Duration
 	ParentResourceHash bool
+	MaxUnavailable     string
 }
 
 func main() {
@@ -38,6 +41,7 @@ func main() {
 	kingpin.Flag("pdb-name-suffix", "Specify default PDB name suffix.").Default(defaultPDBNameSuffix).StringVar(&config.PDBNameSuffix)
 	kingpin.Flag("non-ready-ttl", "Set the ttl for when to remove the managed PDB if the deployment/statefulset is unhealthy (default: disabled).").Default(defaultNonReadyTTL).DurationVar(&config.NonReadyTTL)
 	kingpin.Flag("use-parent-resource-hash", "Uses parent-resource-hash labels as selector for PDBs.").BoolVar(&config.ParentResourceHash)
+	kingpin.Flag("max-unavailable", "The value of maxUnavailable that would be set in the generated PDBs.").Default(defaultMaxUnavailable).StringVar(&config.MaxUnavailable)
 	kingpin.Parse()
 
 	if config.Debug {
@@ -69,6 +73,7 @@ func main() {
 		config.PDBNameSuffix,
 		config.NonReadyTTL,
 		config.ParentResourceHash,
+		intstr.Parse(config.MaxUnavailable),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

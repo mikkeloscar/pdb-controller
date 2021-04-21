@@ -12,8 +12,14 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+)
+
+var (
+	testMaxUnavailable          = intstr.Parse("1")
+	testMaxUnavailableDifferent = intstr.Parse("2")
 )
 
 func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet, namespaces []*v1.Namespace) kubernetes.Interface {
@@ -162,7 +168,7 @@ func TestLabelsIntersect(tt *testing.T) {
 	}
 }
 
-func makePDB(name string, selector map[string]string, ownerReferences []metav1.OwnerReference, lastReadyTime time.Duration) *pv1beta1.PodDisruptionBudget {
+func makePDB(name string, selector map[string]string, ownerReferences []metav1.OwnerReference, maxUnavailable *intstr.IntOrString, lastReadyTime time.Duration) *pv1beta1.PodDisruptionBudget {
 	pdb := &pv1beta1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -173,6 +179,7 @@ func makePDB(name string, selector map[string]string, ownerReferences []metav1.O
 			Selector: &metav1.LabelSelector{
 				MatchLabels: selector,
 			},
+			MaxUnavailable: maxUnavailable,
 		},
 	}
 	if len(ownerReferences) > 0 {
@@ -252,6 +259,7 @@ func TestController(tt *testing.T) {
 		readyReplicas          int32
 		nonReadyTTL            string
 		lastReadyTime          time.Duration
+		maxUnavailable         *intstr.IntOrString
 		pdbExists              bool
 		pdbDeploymentSelector  map[string]string
 		pdbStatefulSetSelector map[string]string
@@ -260,68 +268,76 @@ func TestController(tt *testing.T) {
 		parentResourceHash     bool
 	}{
 		{
-			msg:           "drop pdb when nonReadyTTL is exceeded",
-			replicas:      3,
-			readyReplicas: 0,
-			nonReadyTTL:   "5s",
-			lastReadyTime: 1 * time.Minute,
-			pdbExists:     false,
+			msg:            "drop pdb when nonReadyTTL is exceeded",
+			replicas:       3,
+			readyReplicas:  0,
+			nonReadyTTL:    "5s",
+			lastReadyTime:  1 * time.Minute,
+			maxUnavailable: &testMaxUnavailable,
+			pdbExists:      false,
 		},
 		{
-			msg:           "keep pdb when nonReadyTTL is not exceeded",
-			replicas:      3,
-			readyReplicas: 0,
-			nonReadyTTL:   "15m",
-			lastReadyTime: 5 * time.Minute,
-			pdbExists:     true,
+			msg:            "keep pdb when nonReadyTTL is not exceeded",
+			replicas:       3,
+			readyReplicas:  0,
+			nonReadyTTL:    "15m",
+			lastReadyTime:  5 * time.Minute,
+			maxUnavailable: &testMaxUnavailable,
+			pdbExists:      true,
 		},
 		{
-			msg:           "drop pdb when default nonReadyTTL is exceeded",
-			replicas:      3,
-			readyReplicas: 0,
-			nonReadyTTL:   "",
-			lastReadyTime: 60 * time.Minute,
-			pdbExists:     false,
+			msg:            "drop pdb when default nonReadyTTL is exceeded",
+			replicas:       3,
+			readyReplicas:  0,
+			nonReadyTTL:    "",
+			lastReadyTime:  60 * time.Minute,
+			maxUnavailable: &testMaxUnavailable,
+			pdbExists:      false,
 		},
 		{
-			msg:           "keep pdb when default nonReadyTTL is not exceeded",
-			replicas:      3,
-			readyReplicas: 0,
-			nonReadyTTL:   "",
-			lastReadyTime: 59 * time.Minute,
-			pdbExists:     true,
+			msg:            "keep pdb when default nonReadyTTL is not exceeded",
+			replicas:       3,
+			readyReplicas:  0,
+			nonReadyTTL:    "",
+			lastReadyTime:  59 * time.Minute,
+			maxUnavailable: &testMaxUnavailable,
+			pdbExists:      true,
 		},
 		{
-			msg:           "keep pdb when replicas are ready",
-			replicas:      3,
-			readyReplicas: 3,
-			nonReadyTTL:   "",
-			lastReadyTime: 0,
-			pdbExists:     true,
+			msg:            "keep pdb when replicas are ready",
+			replicas:       3,
+			readyReplicas:  3,
+			nonReadyTTL:    "",
+			lastReadyTime:  0,
+			maxUnavailable: &testMaxUnavailable,
+			pdbExists:      true,
 		},
 		{
-			msg:           "keep pdb when first observed not-ready and TTL not exceeded",
-			replicas:      3,
-			readyReplicas: 0,
-			nonReadyTTL:   "",
-			lastReadyTime: 0,
-			pdbExists:     true,
+			msg:            "keep pdb when first observed not-ready and TTL not exceeded",
+			replicas:       3,
+			readyReplicas:  0,
+			nonReadyTTL:    "",
+			lastReadyTime:  0,
+			maxUnavailable: &testMaxUnavailable,
+			pdbExists:      true,
 		},
 		{
-			msg:           "reset nonReadyTTL when replicas are ready",
-			replicas:      3,
-			readyReplicas: 3,
-			nonReadyTTL:   "",
-			lastReadyTime: 60 * time.Minute,
-			pdbExists:     true,
+			msg:            "reset nonReadyTTL when replicas are ready",
+			replicas:       3,
+			readyReplicas:  3,
+			nonReadyTTL:    "",
+			lastReadyTime:  60 * time.Minute,
+			maxUnavailable: &testMaxUnavailable,
+			pdbExists:      true,
 		},
 		{
-			msg:           "update owned PDB not matching",
-			replicas:      3,
-			readyReplicas: 3,
-			nonReadyTTL:   "",
-			lastReadyTime: 0,
-			pdbExists:     true,
+			msg:            "update owned PDB not matching",
+			replicas:       3,
+			readyReplicas:  3,
+			nonReadyTTL:    "",
+			lastReadyTime:  0,
+			pdbExists:      true,
+			maxUnavailable: &testMaxUnavailable,
 			pdbDeploymentSelector: map[string]string{
 				"not-matching": "deployment",
 			},
@@ -330,12 +346,13 @@ func TestController(tt *testing.T) {
 			},
 		},
 		{
-			msg:           "drop owned PDB if others are matching",
-			replicas:      3,
-			readyReplicas: 3,
-			nonReadyTTL:   "",
-			lastReadyTime: 0,
-			pdbExists:     false,
+			msg:            "drop owned PDB if others are matching",
+			replicas:       3,
+			readyReplicas:  3,
+			nonReadyTTL:    "",
+			lastReadyTime:  0,
+			pdbExists:      false,
+			maxUnavailable: &testMaxUnavailable,
 			addtionalPDBs: []*pv1beta1.PodDisruptionBudget{
 				makePDB(
 					"custom-deployment-pdb",
@@ -344,6 +361,7 @@ func TestController(tt *testing.T) {
 						parentResourceHashLabel: deployHash,
 					},
 					nil,
+					&testMaxUnavailable,
 					0,
 				),
 				makePDB(
@@ -353,26 +371,38 @@ func TestController(tt *testing.T) {
 						parentResourceHashLabel: statefulHash,
 					},
 					nil,
+					&testMaxUnavailable,
 					0,
 				),
 			},
 		},
 		{
-			msg:           "drop owned PDB if less than 2 ready replicas",
-			replicas:      1,
-			readyReplicas: 1,
-			nonReadyTTL:   "",
-			lastReadyTime: 0,
-			pdbExists:     false,
+			msg:            "drop owned PDB if less than 2 ready replicas",
+			replicas:       1,
+			readyReplicas:  1,
+			nonReadyTTL:    "",
+			lastReadyTime:  0,
+			maxUnavailable: &testMaxUnavailable,
+			pdbExists:      false,
 		},
 		{
-			msg:           "add PDB is none exists",
-			replicas:      2,
-			readyReplicas: 2,
-			nonReadyTTL:   "",
-			lastReadyTime: 0,
-			pdbExists:     true,
-			overridePDBs:  []*pv1beta1.PodDisruptionBudget{},
+			msg:            "add PDB is none exists",
+			replicas:       2,
+			readyReplicas:  2,
+			nonReadyTTL:    "",
+			lastReadyTime:  0,
+			pdbExists:      true,
+			maxUnavailable: &testMaxUnavailable,
+			overridePDBs:   []*pv1beta1.PodDisruptionBudget{},
+		},
+		{
+			msg:            "update PDBs if settings are different",
+			replicas:       2,
+			readyReplicas:  2,
+			nonReadyTTL:    "",
+			lastReadyTime:  0,
+			pdbExists:      true,
+			maxUnavailable: &testMaxUnavailableDifferent,
 		},
 	} {
 		tt.Run(tc.msg, func(t *testing.T) {
@@ -410,9 +440,10 @@ func TestController(tt *testing.T) {
 								APIVersion: "apps/v1",
 								Kind:       "Deployment",
 								Name:       "deployment-x",
-								UID:        types.UID("deployment-uid-deployment-x"),
+								UID:        "deployment-uid-deployment-x",
 							},
 						},
+						tc.maxUnavailable,
 						tc.lastReadyTime,
 					),
 					makePDB(
@@ -423,9 +454,10 @@ func TestController(tt *testing.T) {
 								APIVersion: "apps/v1",
 								Kind:       "StatefulSet",
 								Name:       "statefulset-x",
-								UID:        types.UID("statefulset-uid-statefulset-x"),
+								UID:        "statefulset-uid-statefulset-x",
 							},
 						},
+						tc.maxUnavailable,
 						tc.lastReadyTime,
 					),
 				}
@@ -469,6 +501,7 @@ func TestController(tt *testing.T) {
 					"pdb-controller",
 					time.Hour,
 					parentResourceHash,
+					testMaxUnavailable,
 				)
 
 				err := controller.runOnce()
@@ -481,6 +514,10 @@ func TestController(tt *testing.T) {
 				if tc.pdbExists {
 					require.NoError(t, err)
 					require.Equal(t, pdb.Spec.Selector.MatchLabels, deploymentSelector)
+					require.Equal(t, pv1beta1.PodDisruptionBudgetSpec{
+						Selector:       &metav1.LabelSelector{MatchLabels: deploymentSelector},
+						MaxUnavailable: &testMaxUnavailable,
+					}, pdb.Spec)
 				} else {
 					require.Error(t, err)
 					require.True(t, errors.IsNotFound(err))

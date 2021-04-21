@@ -17,8 +17,8 @@ jobs:
     - run: goveralls -coverprofile=profile.cov -service=github
       env:
         COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Push the latest Docker image
-      run: |
-        echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
-        VERSION=latest make build.push
-      if: github.ref == 'refs/heads/master'
+    # - name: Push the latest Docker image
+    #   run: |
+    #     echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+    #     VERSION=latest make build.push
+    #   if: github.ref == 'refs/heads/master'

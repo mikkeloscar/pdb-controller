@@ -55,7 +55,7 @@ func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNa
 func (n *PDBController) Run(ctx context.Context) {
 	for {
 		log.Debug("Running main control loop.")
-		err := n.runOnce()
+		err := n.runOnce(ctx)
 		if err != nil {
 			log.Error(err)
 		}
@@ -70,20 +70,20 @@ func (n *PDBController) Run(ctx context.Context) {
 }
 
 // runOnce runs the main reconcilation loop of the controller.
-func (n *PDBController) runOnce() error {
-	allPDBs, err := n.PolicyV1beta1().PodDisruptionBudgets(v1.NamespaceAll).List(metav1.ListOptions{})
+func (n *PDBController) runOnce(ctx context.Context) error {
+	allPDBs, err := n.PolicyV1beta1().PodDisruptionBudgets(v1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 
 	managedPDBs, unmanagedPDBs := filterPDBs(allPDBs.Items)
 
-	deployments, err := n.AppsV1().Deployments(v1.NamespaceAll).List(metav1.ListOptions{})
+	deployments, err := n.AppsV1().Deployments(v1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
 
-	statefulSets, err := n.AppsV1().StatefulSets(v1.NamespaceAll).List(metav1.ListOptions{})
+	statefulSets, err := n.AppsV1().StatefulSets(v1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func (n *PDBController) runOnce() error {
 	}
 
 	desiredPDBs := n.generateDesiredPDBs(resources, managedPDBs, unmanagedPDBs)
-	n.reconcilePDBs(desiredPDBs, managedPDBs)
+	n.reconcilePDBs(ctx, desiredPDBs, managedPDBs)
 	return nil
 }
 
@@ -192,11 +192,11 @@ func (n *PDBController) generateDesiredPDBs(resources []kubeResource, managedPDB
 	return desiredPDBs
 }
 
-func (n *PDBController) reconcilePDBs(desiredPDBs, managedPDBs map[string]pv1beta1.PodDisruptionBudget) {
+func (n *PDBController) reconcilePDBs(ctx context.Context, desiredPDBs, managedPDBs map[string]pv1beta1.PodDisruptionBudget) {
 	for key, managedPDB := range managedPDBs {
 		desiredPDB, ok := desiredPDBs[key]
 		if !ok {
-			err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Delete(managedPDB.Name, nil)
+			err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Delete(ctx, managedPDB.Name, metav1.DeleteOptions{})
 			if err != nil {
 				log.Errorf("Failed to delete PDB: %v", err)
 				continue
@@ -218,7 +218,7 @@ func (n *PDBController) reconcilePDBs(desiredPDBs, managedPDBs map[string]pv1bet
 			managedPDB.Labels = desiredPDB.Labels
 			managedPDB.Spec = desiredPDB.Spec
 
-			_, err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Update(&managedPDB)
+			_, err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Update(ctx, &managedPDB, metav1.UpdateOptions{})
 			if err != nil {
 				log.Errorf("Failed to update PDB: %v", err)
 				continue
@@ -235,7 +235,7 @@ func (n *PDBController) reconcilePDBs(desiredPDBs, managedPDBs map[string]pv1bet
 
 	for key, desiredPDB := range desiredPDBs {
 		if _, ok := managedPDBs[key]; !ok {
-			_, err := n.PolicyV1beta1().PodDisruptionBudgets(desiredPDB.Namespace).Create(&desiredPDB)
+			_, err := n.PolicyV1beta1().PodDisruptionBudgets(desiredPDB.Namespace).Create(ctx, &desiredPDB, metav1.CreateOptions{})
 			if err != nil {
 				log.Errorf("Failed to create PDB: %v", err)
 				continue

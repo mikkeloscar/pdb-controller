@@ -30,28 +30,28 @@ func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, dep
 	}
 
 	for _, namespace := range namespaces {
-		_, err := client.CoreV1().Namespaces().Create(namespace)
+		_, err := client.CoreV1().Namespaces().Create(context.Background(), namespace, metav1.CreateOptions{})
 		if err != nil {
 			t.Error(err)
 		}
 	}
 
 	for _, pdb := range pdbs {
-		_, err := client.PolicyV1beta1().PodDisruptionBudgets(namespaces[0].Name).Create(pdb)
+		_, err := client.PolicyV1beta1().PodDisruptionBudgets(namespaces[0].Name).Create(context.Background(), pdb, metav1.CreateOptions{})
 		if err != nil {
 			t.Error(err)
 		}
 	}
 
 	for _, depl := range deployments {
-		_, err := client.AppsV1().Deployments(namespaces[0].Name).Create(depl)
+		_, err := client.AppsV1().Deployments(namespaces[0].Name).Create(context.Background(), depl, metav1.CreateOptions{})
 		if err != nil {
 			t.Error(err)
 		}
 	}
 
 	for _, statefulSet := range statefulSets {
-		_, err := client.AppsV1().StatefulSets(namespaces[0].Name).Create(statefulSet)
+		_, err := client.AppsV1().StatefulSets(namespaces[0].Name).Create(context.Background(), statefulSet, metav1.CreateOptions{})
 		if err != nil {
 			t.Error(err)
 		}
@@ -73,7 +73,7 @@ func TestRunOnce(t *testing.T) {
 		Interface: setupMockKubernetes(t, nil, nil, nil, namespaces),
 	}
 
-	err := controller.runOnce()
+	err := controller.runOnce(context.Background())
 	if err != nil {
 		t.Error(err)
 	}
@@ -504,13 +504,13 @@ func TestController(tt *testing.T) {
 					testMaxUnavailable,
 				)
 
-				err := controller.runOnce()
+				err := controller.runOnce(context.Background())
 				if err != nil {
 					t.Errorf("controller failed to run: %s", err)
 				}
 
 				// deployment
-				pdb, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("deployment-x-pdb-controller", metav1.GetOptions{})
+				pdb, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get(context.Background(), "deployment-x-pdb-controller", metav1.GetOptions{})
 				if tc.pdbExists {
 					require.NoError(t, err)
 					require.Equal(t, pdb.Spec.Selector.MatchLabels, deploymentSelector)
@@ -524,7 +524,7 @@ func TestController(tt *testing.T) {
 				}
 
 				// statefulset
-				pdb, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get("statefulset-x-pdb-controller", metav1.GetOptions{})
+				pdb, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get(context.Background(), "statefulset-x-pdb-controller", metav1.GetOptions{})
 				if tc.pdbExists {
 					require.NoError(t, err)
 					require.Equal(t, pdb.Spec.Selector.MatchLabels, statefulSetSelector)

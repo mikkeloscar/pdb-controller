@@ -19,7 +19,7 @@ clean:
 	rm -rf build
 
 test:
-	go test -v $(GOPKGS)
+	go test -v -race -coverprofile=profile.cov -cover $(GOPKGS)
 
 check:
 	golangci-lint run ./...

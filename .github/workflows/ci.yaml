@@ -1,0 +1,24 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-go@v2
+      with:
+        go-version: '^1.16'
+    - run: go get github.com/mattn/goveralls
+    - run: |
+        make test
+        make
+        make build.docker
+    - run: goveralls -coverprofile=profile.cov -service=github
+      env:
+        COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # - name: Push the latest Docker image
+    #   run: |
+    #     echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+    #     VERSION=latest make build.push
+    #   if: github.ref == 'refs/heads/master'

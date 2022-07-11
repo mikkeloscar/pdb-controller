@@ -14,6 +14,7 @@ jobs:
         make test
         make
         make build.docker
+        make build.docker.multiarch
     - run: goveralls -coverprofile=profile.cov -service=github
       env:
         COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}

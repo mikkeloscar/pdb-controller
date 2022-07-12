@@ -50,7 +50,7 @@ build.docker: build.linux
 
 build.docker.multiarch: build.linux.amd64 build.linux.arm64
 	docker buildx create --use
-	docker buildx build --rm -t "$(IMAGE):$(TAG)" -f $(DOCKERFILE) --platform linux/amd64,linux/arm64 --push .
+	docker buildx build --rm -t "$(IMAGE):$(TAG)" -f $(DOCKERFILE) --platform linux/amd64,linux/arm64 .
 
 
 build.push: build.docker

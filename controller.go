@@ -8,7 +8,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
-	pv1beta1 "k8s.io/api/policy/v1beta1"
+	pv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -71,7 +71,7 @@ func (n *PDBController) Run(ctx context.Context) {
 
 // runOnce runs the main reconcilation loop of the controller.
 func (n *PDBController) runOnce(ctx context.Context) error {
-	allPDBs, err := n.PolicyV1beta1().PodDisruptionBudgets(v1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	allPDBs, err := n.PolicyV1().PodDisruptionBudgets(v1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -113,8 +113,8 @@ func (n *PDBController) runOnce(ctx context.Context) error {
 	return nil
 }
 
-func (n *PDBController) generateDesiredPDBs(resources []kubeResource, managedPDBs, unmanagedPDBs map[string]pv1beta1.PodDisruptionBudget) map[string]pv1beta1.PodDisruptionBudget {
-	desiredPDBs := make(map[string]pv1beta1.PodDisruptionBudget, len(managedPDBs))
+func (n *PDBController) generateDesiredPDBs(resources []kubeResource, managedPDBs, unmanagedPDBs map[string]pv1.PodDisruptionBudget) map[string]pv1.PodDisruptionBudget {
+	desiredPDBs := make(map[string]pv1.PodDisruptionBudget, len(managedPDBs))
 
 	nonReadyTTL := time.Time{}
 	if n.nonReadyTTL > 0 {
@@ -144,7 +144,7 @@ func (n *PDBController) generateDesiredPDBs(resources []kubeResource, managedPDB
 		}
 
 		ownedPDBs := getOwnedPDBs(managedPDBs, resource)
-		validPDBs := make([]pv1beta1.PodDisruptionBudget, 0, len(ownedPDBs))
+		validPDBs := make([]pv1.PodDisruptionBudget, 0, len(ownedPDBs))
 		// only consider valid PDBs. If they're invalid they'll be
 		// recreated on the next iteration
 		for _, pdb := range ownedPDBs {
@@ -192,11 +192,11 @@ func (n *PDBController) generateDesiredPDBs(resources []kubeResource, managedPDB
 	return desiredPDBs
 }
 
-func (n *PDBController) reconcilePDBs(ctx context.Context, desiredPDBs, managedPDBs map[string]pv1beta1.PodDisruptionBudget) {
+func (n *PDBController) reconcilePDBs(ctx context.Context, desiredPDBs, managedPDBs map[string]pv1.PodDisruptionBudget) {
 	for key, managedPDB := range managedPDBs {
 		desiredPDB, ok := desiredPDBs[key]
 		if !ok {
-			err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Delete(ctx, managedPDB.Name, metav1.DeleteOptions{})
+			err := n.PolicyV1().PodDisruptionBudgets(managedPDB.Namespace).Delete(ctx, managedPDB.Name, metav1.DeleteOptions{})
 			if err != nil {
 				log.Errorf("Failed to delete PDB: %v", err)
 				continue
@@ -218,7 +218,7 @@ func (n *PDBController) reconcilePDBs(ctx context.Context, desiredPDBs, managedP
 			managedPDB.Labels = desiredPDB.Labels
 			managedPDB.Spec = desiredPDB.Spec
 
-			_, err := n.PolicyV1beta1().PodDisruptionBudgets(managedPDB.Namespace).Update(ctx, &managedPDB, metav1.UpdateOptions{})
+			_, err := n.PolicyV1().PodDisruptionBudgets(managedPDB.Namespace).Update(ctx, &managedPDB, metav1.UpdateOptions{})
 			if err != nil {
 				log.Errorf("Failed to update PDB: %v", err)
 				continue
@@ -235,7 +235,7 @@ func (n *PDBController) reconcilePDBs(ctx context.Context, desiredPDBs, managedP
 
 	for key, desiredPDB := range desiredPDBs {
 		if _, ok := managedPDBs[key]; !ok {
-			_, err := n.PolicyV1beta1().PodDisruptionBudgets(desiredPDB.Namespace).Create(ctx, &desiredPDB, metav1.CreateOptions{})
+			_, err := n.PolicyV1().PodDisruptionBudgets(desiredPDB.Namespace).Create(ctx, &desiredPDB, metav1.CreateOptions{})
 			if err != nil {
 				log.Errorf("Failed to create PDB: %v", err)
 				continue
@@ -263,13 +263,13 @@ func overrideNonReadyTTL(annotations map[string]string, nonReadyTTL time.Time) (
 }
 
 // pdbSpecValid returns true if the PDB spec is up-to-date
-func pdbSpecValid(pdb pv1beta1.PodDisruptionBudget) bool {
+func pdbSpecValid(pdb pv1.PodDisruptionBudget) bool {
 	return pdb.Spec.MinAvailable == nil
 }
 
 // getMatchedPDBs gets matching PodDisruptionBudgets.
-func getMatchedPDBs(labels map[string]string, pdbs map[string]pv1beta1.PodDisruptionBudget) []pv1beta1.PodDisruptionBudget {
-	matchedPDBs := make([]pv1beta1.PodDisruptionBudget, 0)
+func getMatchedPDBs(labels map[string]string, pdbs map[string]pv1.PodDisruptionBudget) []pv1.PodDisruptionBudget {
+	matchedPDBs := make([]pv1.PodDisruptionBudget, 0)
 	for _, pdb := range pdbs {
 		if labelsIntersect(labels, pdb.Spec.Selector.MatchLabels) {
 			matchedPDBs = append(matchedPDBs, pdb)
@@ -278,8 +278,8 @@ func getMatchedPDBs(labels map[string]string, pdbs map[string]pv1beta1.PodDisrup
 	return matchedPDBs
 }
 
-func getOwnedPDBs(pdbs map[string]pv1beta1.PodDisruptionBudget, owner kubeResource) []pv1beta1.PodDisruptionBudget {
-	ownedPDBs := make([]pv1beta1.PodDisruptionBudget, 0, len(pdbs))
+func getOwnedPDBs(pdbs map[string]pv1.PodDisruptionBudget, owner kubeResource) []pv1.PodDisruptionBudget {
+	ownedPDBs := make([]pv1.PodDisruptionBudget, 0, len(pdbs))
 	for _, pdb := range pdbs {
 		if isOwnedReference(owner, pdb.ObjectMeta) {
 			ownedPDBs = append(ownedPDBs, pdb)
@@ -331,9 +331,9 @@ func labelsIntersect(a, b map[string]string) bool {
 	return intersect
 }
 
-func filterPDBs(pdbs []pv1beta1.PodDisruptionBudget) (map[string]pv1beta1.PodDisruptionBudget, map[string]pv1beta1.PodDisruptionBudget) {
-	managed := make(map[string]pv1beta1.PodDisruptionBudget, len(pdbs))
-	unmanaged := make(map[string]pv1beta1.PodDisruptionBudget, len(pdbs))
+func filterPDBs(pdbs []pv1.PodDisruptionBudget) (map[string]pv1.PodDisruptionBudget, map[string]pv1.PodDisruptionBudget) {
+	managed := make(map[string]pv1.PodDisruptionBudget, len(pdbs))
+	unmanaged := make(map[string]pv1.PodDisruptionBudget, len(pdbs))
 	for _, pdb := range pdbs {
 		if containLabels(pdb.Labels, ownerLabels) {
 			managed[pdb.Namespace+"/"+pdb.Name] = pdb
@@ -344,13 +344,13 @@ func filterPDBs(pdbs []pv1beta1.PodDisruptionBudget) (map[string]pv1beta1.PodDis
 	return managed, unmanaged
 }
 
-func (n *PDBController) generatePDB(owner kubeResource, ttl time.Time) pv1beta1.PodDisruptionBudget {
+func (n *PDBController) generatePDB(owner kubeResource, ttl time.Time) pv1.PodDisruptionBudget {
 	var suffix string
 	if n.pdbNameSuffix != "" {
 		suffix = "-" + n.pdbNameSuffix
 	}
 
-	pdb := pv1beta1.PodDisruptionBudget{
+	pdb := pv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      owner.Name() + suffix,
 			Namespace: owner.Namespace(),
@@ -365,7 +365,7 @@ func (n *PDBController) generatePDB(owner kubeResource, ttl time.Time) pv1beta1.
 			Labels:      owner.Labels(),
 			Annotations: make(map[string]string),
 		},
-		Spec: pv1beta1.PodDisruptionBudgetSpec{
+		Spec: pv1.PodDisruptionBudgetSpec{
 			MaxUnavailable: &n.maxUnavailable,
 			Selector:       owner.Selector(),
 		},

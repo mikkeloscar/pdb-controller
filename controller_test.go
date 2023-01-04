@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	pv1beta1 "k8s.io/api/policy/v1beta1"
+	pv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -22,7 +22,7 @@ var (
 	testMaxUnavailableDifferent = intstr.Parse("2")
 )
 
-func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet, namespaces []*v1.Namespace) kubernetes.Interface {
+func setupMockKubernetes(t *testing.T, pdbs []*pv1.PodDisruptionBudget, deployments []*appsv1.Deployment, statefulSets []*appsv1.StatefulSet, namespaces []*v1.Namespace) kubernetes.Interface {
 	client := fake.NewSimpleClientset()
 
 	if len(namespaces) == 0 {
@@ -37,7 +37,7 @@ func setupMockKubernetes(t *testing.T, pdbs []*pv1beta1.PodDisruptionBudget, dep
 	}
 
 	for _, pdb := range pdbs {
-		_, err := client.PolicyV1beta1().PodDisruptionBudgets(namespaces[0].Name).Create(context.Background(), pdb, metav1.CreateOptions{})
+		_, err := client.PolicyV1().PodDisruptionBudgets(namespaces[0].Name).Create(context.Background(), pdb, metav1.CreateOptions{})
 		if err != nil {
 			t.Error(err)
 		}
@@ -168,14 +168,14 @@ func TestLabelsIntersect(tt *testing.T) {
 	}
 }
 
-func makePDB(name string, selector map[string]string, ownerReferences []metav1.OwnerReference, maxUnavailable *intstr.IntOrString, lastReadyTime time.Duration) *pv1beta1.PodDisruptionBudget {
-	pdb := &pv1beta1.PodDisruptionBudget{
+func makePDB(name string, selector map[string]string, ownerReferences []metav1.OwnerReference, maxUnavailable *intstr.IntOrString, lastReadyTime time.Duration) *pv1.PodDisruptionBudget {
+	pdb := &pv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
 			Annotations: make(map[string]string),
 			UID:         types.UID(name),
 		},
-		Spec: pv1beta1.PodDisruptionBudgetSpec{
+		Spec: pv1.PodDisruptionBudgetSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: selector,
 			},
@@ -263,8 +263,8 @@ func TestController(tt *testing.T) {
 		pdbExists              bool
 		pdbDeploymentSelector  map[string]string
 		pdbStatefulSetSelector map[string]string
-		addtionalPDBs          []*pv1beta1.PodDisruptionBudget
-		overridePDBs           []*pv1beta1.PodDisruptionBudget
+		addtionalPDBs          []*pv1.PodDisruptionBudget
+		overridePDBs           []*pv1.PodDisruptionBudget
 		parentResourceHash     bool
 	}{
 		{
@@ -353,7 +353,7 @@ func TestController(tt *testing.T) {
 			lastReadyTime:  0,
 			pdbExists:      false,
 			maxUnavailable: &testMaxUnavailable,
-			addtionalPDBs: []*pv1beta1.PodDisruptionBudget{
+			addtionalPDBs: []*pv1.PodDisruptionBudget{
 				makePDB(
 					"custom-deployment-pdb",
 					map[string]string{
@@ -393,7 +393,7 @@ func TestController(tt *testing.T) {
 			lastReadyTime:  0,
 			pdbExists:      true,
 			maxUnavailable: &testMaxUnavailable,
-			overridePDBs:   []*pv1beta1.PodDisruptionBudget{},
+			overridePDBs:   []*pv1.PodDisruptionBudget{},
 		},
 		{
 			msg:            "update PDBs if settings are different",
@@ -431,7 +431,7 @@ func TestController(tt *testing.T) {
 					pdbStatefulSetSelector = tc.pdbStatefulSetSelector
 				}
 
-				pdbs := []*pv1beta1.PodDisruptionBudget{
+				pdbs := []*pv1.PodDisruptionBudget{
 					makePDB(
 						"deployment-x-pdb-controller",
 						pdbDeploymentSelector,
@@ -510,11 +510,11 @@ func TestController(tt *testing.T) {
 				}
 
 				// deployment
-				pdb, err := controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get(context.Background(), "deployment-x-pdb-controller", metav1.GetOptions{})
+				pdb, err := controller.Interface.PolicyV1().PodDisruptionBudgets("default").Get(context.Background(), "deployment-x-pdb-controller", metav1.GetOptions{})
 				if tc.pdbExists {
 					require.NoError(t, err)
 					require.Equal(t, pdb.Spec.Selector.MatchLabels, deploymentSelector)
-					require.Equal(t, pv1beta1.PodDisruptionBudgetSpec{
+					require.Equal(t, pv1.PodDisruptionBudgetSpec{
 						Selector:       &metav1.LabelSelector{MatchLabels: deploymentSelector},
 						MaxUnavailable: &testMaxUnavailable,
 					}, pdb.Spec)
@@ -524,7 +524,7 @@ func TestController(tt *testing.T) {
 				}
 
 				// statefulset
-				pdb, err = controller.Interface.PolicyV1beta1().PodDisruptionBudgets("default").Get(context.Background(), "statefulset-x-pdb-controller", metav1.GetOptions{})
+				pdb, err = controller.Interface.PolicyV1().PodDisruptionBudgets("default").Get(context.Background(), "statefulset-x-pdb-controller", metav1.GetOptions{})
 				if tc.pdbExists {
 					require.NoError(t, err)
 					require.Equal(t, pdb.Spec.Selector.MatchLabels, statefulSetSelector)

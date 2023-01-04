@@ -16,7 +16,7 @@ LDFLAGS       ?= -X main.version=$(VERSION) -w -s
 default: build.local
 
 clean:
-	rm -rf build
+	rm -rf build profile.cov
 
 test:
 	go test -v -race -coverprofile=profile.cov -cover $(GOPKGS)

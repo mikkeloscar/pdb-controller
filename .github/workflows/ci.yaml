@@ -1,5 +1,5 @@
 name: ci
-on: [push, pull_request]
+on: [push, pull_request, release]
 jobs:
   build:
     name: Build
@@ -22,3 +22,8 @@ jobs:
         echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
         VERSION=latest make build.push
       if: github.ref == 'refs/heads/master'
+    - name: Push the release Docker image
+      run: |
+        echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+        VERSION=$GITHUB_REF_NAME make build.push
+      if: github.event_name == 'release'

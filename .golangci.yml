@@ -9,5 +9,4 @@ linters:
     - staticcheck
     - govet
     - ineffassign
-    - golint
     - goimports

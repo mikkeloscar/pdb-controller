@@ -63,7 +63,7 @@ $ make
 ## Setup
 
 The `pdb-controller` can be run as a deployment in the cluster. See
-[deployment.yaml](/Docs/deployment.yaml) for an example.
+[deployment.yaml](docs/deployment.yaml) for an example.
 
 Deploy it by running:
 

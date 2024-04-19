@@ -68,7 +68,7 @@ The `pdb-controller` can be run as a deployment in the cluster. See
 Deploy it by running:
 
 ```bash
-$ kubectl apply -f Docs/deployment.yaml
+$ kubectl apply -f docs/deployment.yaml
 ```
 
 ## TODO

@@ -63,12 +63,12 @@ $ make
 ## Setup
 
 The `pdb-controller` can be run as a deployment in the cluster. See
-[deployment.yaml](/Docs/deployment.yaml) for an example.
+[deployment.yaml](docs/deployment.yaml) for an example.
 
 Deploy it by running:
 
 ```bash
-$ kubectl apply -f Docs/deployment.yaml
+$ kubectl apply -f docs/deployment.yaml
 ```
 
 ## TODO

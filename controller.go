@@ -208,6 +208,10 @@ func (n *PDBController) reconcilePDBs(ctx context.Context, desiredPDBs, managedP
 				"namespace": managedPDB.Namespace,
 				"selector":  managedPDB.Spec.Selector.String(),
 			}).Info("")
+
+			// If we delete a PDB then we don't want to attempt to update it later since this will
+			// result in a `StorageError` since we can't find the PDB to make an update to it.
+			continue
 		}
 
 		// check if PDBs are equal an only update if not

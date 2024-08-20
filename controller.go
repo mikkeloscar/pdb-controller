@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 )
 
 const (
@@ -192,6 +193,27 @@ func (n *PDBController) generateDesiredPDBs(resources []kubeResource, managedPDB
 	return desiredPDBs
 }
 
+// mergeActualAndDesiredPDB takes the current definition of a PDB as it is in cluster and a PDB
+// with our desired configurations and does a merge between them. We also return a boolean to tell the
+// caller if any change actually had to be made to achieve our desired state or not
+func mergeActualAndDesiredPDB(managedPDB, desiredPDB pv1.PodDisruptionBudget) (pv1.PodDisruptionBudget, bool) {
+
+	needsUpdate := false
+
+	// check if PDBs are equal an only update if not
+	if !equality.Semantic.DeepEqual(managedPDB.Spec, desiredPDB.Spec) ||
+		!equality.Semantic.DeepEqual(managedPDB.Labels, desiredPDB.Labels) ||
+		!equality.Semantic.DeepEqual(managedPDB.Annotations, desiredPDB.Annotations) {
+		managedPDB.Annotations = desiredPDB.Annotations
+		managedPDB.Labels = desiredPDB.Labels
+		managedPDB.Spec = desiredPDB.Spec
+
+		needsUpdate = true
+	}
+
+	return managedPDB, needsUpdate
+}
+
 func (n *PDBController) reconcilePDBs(ctx context.Context, desiredPDBs, managedPDBs map[string]pv1.PodDisruptionBudget) {
 	for key, managedPDB := range managedPDBs {
 		desiredPDB, ok := desiredPDBs[key]
@@ -215,14 +237,36 @@ func (n *PDBController) reconcilePDBs(ctx context.Context, desiredPDBs, managedP
 		}
 
 		// check if PDBs are equal an only update if not
-		if !equality.Semantic.DeepEqual(managedPDB.Spec, desiredPDB.Spec) ||
-			!equality.Semantic.DeepEqual(managedPDB.Labels, desiredPDB.Labels) ||
-			!equality.Semantic.DeepEqual(managedPDB.Annotations, desiredPDB.Annotations) {
-			managedPDB.Annotations = desiredPDB.Annotations
-			managedPDB.Labels = desiredPDB.Labels
-			managedPDB.Spec = desiredPDB.Spec
+		updatedPDB, needsUpdate := mergeActualAndDesiredPDB(managedPDB, desiredPDB)
+		if needsUpdate {
+			err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				// Technically the updatedPDB and managedPDB namespace should never be different
+				// but just to be **certain** we're updating the correct namespace we'll just use
+				// the one that was given to us and not potentially modified
+				_, err := n.PolicyV1().PodDisruptionBudgets(managedPDB.Namespace).Update(ctx, &updatedPDB, metav1.UpdateOptions{})
 
-			_, err := n.PolicyV1().PodDisruptionBudgets(managedPDB.Namespace).Update(ctx, &managedPDB, metav1.UpdateOptions{})
+				// If the update failed that likely means that our definition of what was on the cluster
+				// has become out of date. To resolve this we'll need to get a more up to date copy of
+				// the object we're attempting to modify
+				if err != nil {
+					currentPDB, err := n.PolicyV1().PodDisruptionBudgets(managedPDB.Namespace).Get(ctx, managedPDB.Name, metav1.GetOptions{})
+
+					// This err is locally scoped to this if block and will not cause our `RetryOnConflict`
+					// to pass if it is nil. If we're in this block then we will get another Retry
+					if err != nil {
+						return err
+					}
+
+					updatedPDB, _ = mergeActualAndDesiredPDB(
+						*currentPDB,
+						desiredPDB,
+					)
+				}
+
+				// If this err != nil then the current block will be re-run by `RetryOnConflict`
+				// on an exponential backoff schedule to see if we can fix the problem by trying again
+				return err
+			})
 			if err != nil {
 				log.Errorf("Failed to update PDB: %v", err)
 				continue

@@ -1,5 +1,10 @@
 name: ci
-on: [push, pull_request, release]
+on:
+  push:
+  pull_request:
+  create:
+    tags: '*'
+
 jobs:
   build:
     name: Build
@@ -25,5 +30,5 @@ jobs:
     - name: Push the release Docker image
       run: |
         echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
-        VERSION=$GITHUB_REF_NAME make build.push
-      if: github.event_name == 'release'
+        VERSION=${{ github.ref_name }} make build.push
+      if: startsWith(github.ref, 'refs/tags/')

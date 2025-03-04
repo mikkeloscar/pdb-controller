@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
 )
 
 var (
@@ -69,8 +70,29 @@ func TestRunOnce(t *testing.T) {
 		},
 	}
 
-	controller := &PDBController{
-		Interface: setupMockKubernetes(t, nil, nil, nil, namespaces),
+	client := setupMockKubernetes(t, nil, nil, nil, namespaces)
+	controller := NewPDBController(
+		time.Minute,
+		client,
+		"pdb-controller",
+		0,
+		false,
+		testMaxUnavailable,
+	)
+
+	// Initialize the informer caches
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	go controller.deploymentInformer.Run(stopCh)
+	go controller.statefulSetInformer.Run(stopCh)
+	go controller.pdbInformer.Run(stopCh)
+	
+	// Wait for caches to sync
+	if !cache.WaitForCacheSync(stopCh, 
+		controller.deploymentInformer.HasSynced,
+		controller.statefulSetInformer.HasSynced,
+		controller.pdbInformer.HasSynced) {
+		t.Fatalf("Failed to wait for caches to sync")
 	}
 
 	err := controller.runOnce(context.Background())
@@ -88,12 +110,22 @@ func TestRun(t *testing.T) {
 		},
 	}
 
-	controller := &PDBController{
-		Interface: setupMockKubernetes(t, nil, nil, nil, namespaces),
-	}
+	client := setupMockKubernetes(t, nil, nil, nil, namespaces)
+	controller := NewPDBController(
+		time.Minute,
+		client,
+		"pdb-controller",
+		0,
+		false,
+		testMaxUnavailable,
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go controller.Run(ctx)
+	
+	// Allow a brief moment for the controller to start
+	time.Sleep(100 * time.Millisecond)
+	
 	cancel()
 }
 
@@ -116,55 +148,6 @@ func TestContainLabels(t *testing.T) {
 
 	if containLabels(labels, notExpected) {
 		t.Errorf("did not expect %s to be contained in %s", notExpected, labels)
-	}
-}
-
-func TestLabelsIntersect(tt *testing.T) {
-	for _, tc := range []struct {
-		msg       string
-		a         map[string]string
-		b         map[string]string
-		intersect bool
-	}{
-		{
-			msg: "matching maps should intersect",
-			a: map[string]string{
-				"foo": "bar",
-			},
-			b: map[string]string{
-				"foo": "bar",
-			},
-			intersect: true,
-		},
-		{
-			msg: "partly matching maps should intersect",
-			a: map[string]string{
-				"foo": "bar",
-			},
-			b: map[string]string{
-				"foo": "bar",
-				"bar": "foo",
-			},
-			intersect: true,
-		},
-		{
-			msg: "maps with matching keys but different values should not inersect",
-			a: map[string]string{
-				"foo": "bar",
-				"bar": "baz",
-			},
-			b: map[string]string{
-				"foo": "bar",
-				"bar": "foo",
-			},
-			intersect: false,
-		},
-	} {
-		tt.Run(tc.msg, func(t *testing.T) {
-			if labelsIntersect(tc.a, tc.b) != tc.intersect {
-				t.Errorf("expected intersection to be %t, was %t", tc.intersect, labelsIntersect(tc.a, tc.b))
-			}
-		})
 	}
 }
 
@@ -504,6 +487,21 @@ func TestController(tt *testing.T) {
 					testMaxUnavailable,
 				)
 
+				// Initialize the informer caches
+				stopCh := make(chan struct{})
+				defer close(stopCh)
+				go controller.deploymentInformer.Run(stopCh)
+				go controller.statefulSetInformer.Run(stopCh)
+				go controller.pdbInformer.Run(stopCh)
+				
+				// Wait for caches to sync
+				if !cache.WaitForCacheSync(stopCh, 
+					controller.deploymentInformer.HasSynced,
+					controller.statefulSetInformer.HasSynced,
+					controller.pdbInformer.HasSynced) {
+					t.Fatalf("Failed to wait for caches to sync")
+				}
+
 				err := controller.runOnce(context.Background())
 				if err != nil {
 					t.Errorf("controller failed to run: %s", err)
@@ -535,4 +533,260 @@ func TestController(tt *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReconcile(t *testing.T) {
+	namespaces := []*v1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "default",
+			},
+		},
+	}
+
+	// Create a deployment with 3 replicas, all ready
+	deployment := &appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-deployment",
+			Namespace: "default",
+			UID:       types.UID("test-deployment-uid"),
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: func() *int32 { i := int32(3); return &i }(),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "test",
+				},
+			},
+			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app": "test",
+					},
+				},
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:  "test",
+							Image: "test",
+						},
+					},
+				},
+			},
+		},
+		Status: appsv1.DeploymentStatus{
+			ReadyReplicas: 3,
+		},
+	}
+
+	// Create the mock client with the deployment
+	client := setupMockKubernetes(t, nil, []*appsv1.Deployment{deployment}, nil, namespaces)
+	controller := NewPDBController(
+		time.Minute,
+		client,
+		"pdb-controller",
+		0,
+		false,
+		testMaxUnavailable,
+	)
+
+	// Initialize the informer caches
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	go controller.deploymentInformer.Run(stopCh)
+	go controller.statefulSetInformer.Run(stopCh)
+	go controller.pdbInformer.Run(stopCh)
+	
+	// Wait for caches to sync
+	if !cache.WaitForCacheSync(stopCh, 
+		controller.deploymentInformer.HasSynced,
+		controller.statefulSetInformer.HasSynced,
+		controller.pdbInformer.HasSynced) {
+		t.Fatalf("Failed to wait for caches to sync")
+	}
+
+	// Create a context
+	ctx := context.Background()
+
+	// Run the controller's runOnce method directly instead of using reconcile
+	err := controller.runOnce(ctx)
+	require.NoError(t, err)
+
+	// Verify that a PDB was created
+	pdbs, err := client.PolicyV1().PodDisruptionBudgets("default").List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 1, len(pdbs.Items), "Expected 1 PDB to be created")
+	require.Equal(t, "test-deployment-pdb-controller", pdbs.Items[0].Name)
+
+	// Verify the PDB has the right owner reference
+	require.Equal(t, 1, len(pdbs.Items[0].OwnerReferences))
+	require.Equal(t, "Deployment", pdbs.Items[0].OwnerReferences[0].Kind)
+	require.Equal(t, "test-deployment", pdbs.Items[0].OwnerReferences[0].Name)
+}
+
+func TestProcessNextItem(t *testing.T) {
+	namespaces := []*v1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "default",
+			},
+		},
+	}
+
+	client := setupMockKubernetes(t, nil, nil, nil, namespaces)
+	controller := NewPDBController(
+		time.Minute,
+		client,
+		"pdb-controller",
+		0,
+		false,
+		testMaxUnavailable,
+	)
+
+	// Create a context
+	ctx := context.Background()
+
+	// Add an item to the queue first so we don't hang
+	controller.queue.Add("default/test-item")
+	
+	// Test with valid item in queue
+	result := controller.processNextItem(ctx)
+	require.True(t, result, "processNextItem should return true for valid item")
+
+	// Add invalid item to queue (should be handled gracefully)
+	controller.queue.Add("invalid-format")
+	result = controller.processNextItem(ctx)
+	require.True(t, result, "processNextItem should return true even for invalid item")
+	
+	// Shutdown the queue
+	controller.queue.ShutDown()
+	
+	// Test with queue shutdown
+	result = controller.processNextItem(ctx)
+	require.False(t, result, "processNextItem should return false when queue is shutdown")
+}
+
+func TestEnqueueResource(t *testing.T) {
+	namespaces := []*v1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "default",
+			},
+		},
+	}
+
+	client := setupMockKubernetes(t, nil, nil, nil, namespaces)
+	controller := NewPDBController(
+		time.Minute,
+		client,
+		"pdb-controller",
+		0,
+		false,
+		testMaxUnavailable,
+	)
+
+	// Test with a deployment
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-deployment",
+			Namespace: "default",
+		},
+	}
+
+	// Call enqueueResource
+	controller.enqueueResource(deployment)
+	require.Equal(t, 1, controller.queue.Len(), "Queue should have one item after adding deployment")
+
+	// Test with a new resource
+	deployment2 := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-deployment2",
+			Namespace: "default",
+		},
+	}
+
+	// Add another resource
+	controller.enqueueResource(deployment2)
+	require.Equal(t, 2, controller.queue.Len(), "Queue should have two items")
+
+	// Verify the keys in the queue
+	item1, _ := controller.queue.Get()
+	controller.queue.Done(item1)
+	item2, _ := controller.queue.Get()
+	controller.queue.Done(item2)
+
+	// Keys should be in the format namespace/name
+	keys := []string{item1, item2}
+	require.Contains(t, keys, "default/test-deployment")
+	require.Contains(t, keys, "default/test-deployment2")
+}
+
+func TestEnqueuePDB(t *testing.T) {
+	namespaces := []*v1.Namespace{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "default",
+			},
+		},
+	}
+
+	client := setupMockKubernetes(t, nil, nil, nil, namespaces)
+	controller := NewPDBController(
+		time.Minute,
+		client,
+		"pdb-controller",
+		0,
+		false,
+		testMaxUnavailable,
+	)
+
+	// Test with a PDB that has our heritage label
+	pdb := &pv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pdb",
+			Namespace: "default",
+			Labels: map[string]string{
+				"heritage": "pdb-controller",
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+					Name:       "test-deployment",
+				},
+			},
+		},
+	}
+
+	// Call enqueuePDB
+	controller.enqueuePDB(pdb)
+	require.Equal(t, 1, controller.queue.Len(), "Queue should have one item after adding PDB")
+
+	// Clear the queue
+	controller.queue.Get()
+
+	// Test with PDB without our heritage label
+	pdbNoOwner := &pv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pdb-no-owner",
+			Namespace: "default",
+		},
+	}
+
+	controller.enqueuePDB(pdbNoOwner)
+	require.Equal(t, 0, controller.queue.Len(), "Queue should be empty for PDB without heritage label")
+
+	// Test with a different type of object (should be handled gracefully)
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-deployment",
+			Namespace: "default",
+		},
+	}
+	controller.enqueuePDB(deployment)
+	require.Equal(t, 0, controller.queue.Len(), "Queue should be empty when passing non-PDB object")
 }

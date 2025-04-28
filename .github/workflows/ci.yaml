@@ -19,16 +19,42 @@ jobs:
         make test
         make
         make build.docker
+    - run: |
+      make test
+      make build.linux.amd64
+      make build.linux.arm64
     - run: goveralls -coverprofile=profile.cov -service=github
       env:
         COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Push the latest Docker image
-      run: |
-        echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
-        VERSION=latest make build.push
+    - name: Set up QEMU for multi-arch
+      uses: docker/setup-qemu-action@v2
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Log in to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+    - name: Build & push multi-arch image (latest)
       if: github.ref == 'refs/heads/master'
-    - name: Push the release Docker image
-      run: |
-        echo ${{ secrets.DOCKERHUB_PASSWORD }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
-        VERSION=${{ github.ref_name }} make build.push
+      uses: docker/build-push-action@v3
+      with:
+        context: .
+        file: Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: mikkeloscar/pdb-controller:latest
+
+    - name: Build & push multi-arch image (release)
       if: startsWith(github.ref, 'refs/tags/')
+      uses: docker/build-push-action@v3
+      with:
+        context: .
+        file: Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: |
+          mikkeloscar/pdb-controller:${{ github.ref_name }}

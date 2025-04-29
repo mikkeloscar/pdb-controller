@@ -17,12 +17,8 @@ jobs:
     - run: go install github.com/mattn/goveralls@latest
     - run: |
         make test
-        make
-        make build.docker
-    - run: |
-      make test
-      make build.linux.amd64
-      make build.linux.arm64
+        make build.linux.amd64
+        make build.linux.arm64
     - run: goveralls -coverprofile=profile.cov -service=github
       env:
         COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}

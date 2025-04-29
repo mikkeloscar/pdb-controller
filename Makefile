@@ -48,5 +48,19 @@ build/osx/$(BINARY): $(SOURCES)
 build.docker: build.linux
 	docker build --rm -t "$(IMAGE):$(TAG)" -f $(DOCKERFILE) --build-arg TARGETARCH= .
 
+build.docker.multi: build.linux.amd64 build.linux.arm64
+	docker buildx build \
+		--platform linux/amd64,linux/arm64 \
+		--load \
+		-t "$(IMAGE):$(TAG)" \
+		-f $(DOCKERFILE) .
+
 build.push: build.docker
 	docker push "$(IMAGE):$(TAG)"
+
+build.push.multi: build.linux.amd64 build.linux.arm64
+	docker buildx build \
+		--platform linux/amd64,linux/arm64 \
+		--push \
+		-t "$(IMAGE):$(TAG)" \
+		-f $(DOCKERFILE) .

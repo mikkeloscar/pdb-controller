@@ -53,22 +53,22 @@ func (s statefulSet) Labels() map[string]string {
 }
 
 func (s statefulSet) TemplateLabels() map[string]string {
-	return s.StatefulSet.Spec.Template.Labels
+	return s.Spec.Template.Labels
 }
 
 func (s statefulSet) Replicas() int32 {
-	if s.StatefulSet.Spec.Replicas == nil {
+	if s.Spec.Replicas == nil {
 		return 1
 	}
-	return *s.StatefulSet.Spec.Replicas
+	return *s.Spec.Replicas
 }
 
 func (s statefulSet) StatusReadyReplicas() int32 {
-	return s.StatefulSet.Status.ReadyReplicas
+	return s.Status.ReadyReplicas
 }
 
 func (s statefulSet) Selector() *metav1.LabelSelector {
-	return s.StatefulSet.Spec.Selector
+	return s.Spec.Selector
 }
 
 type deployment struct {
@@ -104,20 +104,20 @@ func (d deployment) Labels() map[string]string {
 }
 
 func (d deployment) TemplateLabels() map[string]string {
-	return d.Deployment.Spec.Template.Labels
+	return d.Spec.Template.Labels
 }
 
 func (d deployment) Replicas() int32 {
-	if d.Deployment.Spec.Replicas == nil {
+	if d.Spec.Replicas == nil {
 		return 1
 	}
-	return *d.Deployment.Spec.Replicas
+	return *d.Spec.Replicas
 }
 
 func (d deployment) StatusReadyReplicas() int32 {
-	return d.Deployment.Status.ReadyReplicas
+	return d.Status.ReadyReplicas
 }
 
 func (d deployment) Selector() *metav1.LabelSelector {
-	return d.Deployment.Spec.Selector
+	return d.Spec.Selector
 }

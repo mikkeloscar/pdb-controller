@@ -6,6 +6,3 @@ linters:
     - govet
     - ineffassign
     - goimports
-  settings:
-    golint:
-      min-confidence: 0.9

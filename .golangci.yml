@@ -1,12 +1,10 @@
-run:
-linters-settings:
-  golint:
-      min-confidence: 0.9
-
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
     - staticcheck
     - govet
     - ineffassign
+formatters:
+  enable:
     - goimports

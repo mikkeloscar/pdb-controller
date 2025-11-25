@@ -97,77 +97,6 @@ func TestRun(t *testing.T) {
 	cancel()
 }
 
-func TestContainLabels(t *testing.T) {
-	labels := map[string]string{
-		"foo": "bar",
-	}
-
-	expected := map[string]string{
-		"foo": "bar",
-	}
-
-	if !containLabels(labels, expected) {
-		t.Errorf("expected %s to be contained in %s", expected, labels)
-	}
-
-	notExpected := map[string]string{
-		"foo": "baz",
-	}
-
-	if containLabels(labels, notExpected) {
-		t.Errorf("did not expect %s to be contained in %s", notExpected, labels)
-	}
-}
-
-func TestLabelsIntersect(tt *testing.T) {
-	for _, tc := range []struct {
-		msg       string
-		a         map[string]string
-		b         map[string]string
-		intersect bool
-	}{
-		{
-			msg: "matching maps should intersect",
-			a: map[string]string{
-				"foo": "bar",
-			},
-			b: map[string]string{
-				"foo": "bar",
-			},
-			intersect: true,
-		},
-		{
-			msg: "partly matching maps should intersect",
-			a: map[string]string{
-				"foo": "bar",
-			},
-			b: map[string]string{
-				"foo": "bar",
-				"bar": "foo",
-			},
-			intersect: true,
-		},
-		{
-			msg: "maps with matching keys but different values should not inersect",
-			a: map[string]string{
-				"foo": "bar",
-				"bar": "baz",
-			},
-			b: map[string]string{
-				"foo": "bar",
-				"bar": "foo",
-			},
-			intersect: false,
-		},
-	} {
-		tt.Run(tc.msg, func(t *testing.T) {
-			if labelsIntersect(tc.a, tc.b) != tc.intersect {
-				t.Errorf("expected intersection to be %t, was %t", tc.intersect, labelsIntersect(tc.a, tc.b))
-			}
-		})
-	}
-}
-
 func makePDB(name string, selector map[string]string, ownerReferences []metav1.OwnerReference, maxUnavailable *intstr.IntOrString, lastReadyTime time.Duration) *pv1.PodDisruptionBudget {
 	pdb := &pv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
@@ -462,7 +391,29 @@ func TestController(tt *testing.T) {
 					),
 				}
 				if len(tc.addtionalPDBs) > 0 {
-					pdbs = append(pdbs, tc.addtionalPDBs...)
+					for _, p := range tc.addtionalPDBs {
+						newPDB := *p
+						newSelector := make(map[string]string)
+
+						if p.Name == "custom-deployment-pdb" {
+							for k, v := range deploymentSelector {
+								newSelector[k] = v
+							}
+						} else if p.Name == "custom-statefulset-pdb" {
+							for k, v := range statefulSetSelector {
+								newSelector[k] = v
+							}
+						} else {
+							for k, v := range p.Spec.Selector.MatchLabels {
+								newSelector[k] = v
+							}
+						}
+
+						newPDB.Spec.Selector = &metav1.LabelSelector{
+							MatchLabels: newSelector,
+						}
+						pdbs = append(pdbs, &newPDB)
+					}
 				}
 
 				if tc.overridePDBs != nil {

@@ -11,6 +11,7 @@ import (
 	pv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
@@ -316,10 +317,14 @@ func pdbSpecValid(pdb pv1.PodDisruptionBudget) bool {
 }
 
 // getMatchedPDBs gets matching PodDisruptionBudgets.
-func getMatchedPDBs(labels map[string]string, pdbs map[string]pv1.PodDisruptionBudget) []pv1.PodDisruptionBudget {
+func getMatchedPDBs(resourceLabels map[string]string, pdbs map[string]pv1.PodDisruptionBudget) []pv1.PodDisruptionBudget {
 	matchedPDBs := make([]pv1.PodDisruptionBudget, 0)
 	for _, pdb := range pdbs {
-		if labelsIntersect(labels, pdb.Spec.Selector.MatchLabels) {
+		selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+		if err != nil {
+			continue
+		}
+		if selector.Matches(labels.Set(resourceLabels)) {
 			matchedPDBs = append(matchedPDBs, pdb)
 		}
 	}
@@ -350,40 +355,11 @@ func isOwnedReference(owner kubeResource, dependent metav1.ObjectMeta) bool {
 	return false
 }
 
-// containLabels reports whether expectedLabels are in labels.
-func containLabels(labels, expectedLabels map[string]string) bool {
-	for key, val := range expectedLabels {
-		if v, ok := labels[key]; !ok || v != val {
-			return false
-		}
-	}
-	return true
-}
-
-// labelsIntersect checks whether two maps a and b intersects. Intersection is
-// defined as at least one identical key value pair must exist in both maps and
-// there must be no keys which match where the values doesn't match.
-func labelsIntersect(a, b map[string]string) bool {
-	intersect := false
-	for key, val := range a {
-		v, ok := b[key]
-		if ok {
-			if v == val {
-				intersect = true
-			} else { // if the key exists but the values doesn't match, don't consider it an intersection
-				return false
-			}
-		}
-	}
-
-	return intersect
-}
-
 func filterPDBs(pdbs []pv1.PodDisruptionBudget) (map[string]pv1.PodDisruptionBudget, map[string]pv1.PodDisruptionBudget) {
 	managed := make(map[string]pv1.PodDisruptionBudget, len(pdbs))
 	unmanaged := make(map[string]pv1.PodDisruptionBudget, len(pdbs))
 	for _, pdb := range pdbs {
-		if containLabels(pdb.Labels, ownerLabels) {
+		if labels.SelectorFromSet(ownerLabels).Matches(labels.Set(pdb.Labels)) {
 			managed[pdb.Namespace+"/"+pdb.Name] = pdb
 			continue
 		}

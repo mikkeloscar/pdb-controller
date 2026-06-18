@@ -10,9 +10,9 @@ and was created for lack of an alternative.
 
 ## How it works
 
-The controller simply gets all Pod Disruption Budgets for each namespace and
-compares them to Deployments and StatefulSets. For any resource with more than
-1 replica and no matching Pod Disruption Budget, a default PDB will be created:
+The controller uses Kubernetes informers and watch functionality to detect changes in Deployments, StatefulSets and PodDisruptionBudgets.
+It automatically gets all Pod Disruption Budgets for each namespace and compares them to Deployments and StatefulSets. 
+For any resource with more than 1 replica and no matching Pod Disruption Budget, a default PDB will be created:
 
 ```yaml
 apiVersion: policy/v1beta1

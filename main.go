@@ -10,6 +10,7 @@ import (
 
 	kingpin "github.com/alecthomas/kingpin/v2"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -31,6 +32,7 @@ type config struct {
 	NonReadyTTL        time.Duration
 	ParentResourceHash bool
 	MaxUnavailable     string
+	EnableRollouts     bool
 }
 
 func main() {
@@ -42,6 +44,7 @@ func main() {
 	kingpin.Flag("non-ready-ttl", "Set the ttl for when to remove the managed PDB if the deployment/statefulset is unhealthy (default: disabled).").Default(defaultNonReadyTTL).DurationVar(&config.NonReadyTTL)
 	kingpin.Flag("use-parent-resource-hash", "Uses parent-resource-hash labels as selector for PDBs.").BoolVar(&config.ParentResourceHash)
 	kingpin.Flag("max-unavailable", "The value of maxUnavailable that would be set in the generated PDBs.").Default(defaultMaxUnavailable).StringVar(&config.MaxUnavailable)
+	kingpin.Flag("enable-rollouts", "Also manage PDBs for Argo Rollouts (argoproj.io/v1alpha1). Opt-in; requires the Rollout CRD and get/list/watch RBAC on rollouts.argoproj.io.").BoolVar(&config.EnableRollouts)
 	kingpin.Parse()
 
 	if config.Debug {
@@ -67,9 +70,23 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Argo Rollout support is opt-in. When disabled, the dynamic client stays
+	// nil and the controller behaves exactly as before — no extra API calls,
+	// no extra RBAC. Creation failure is non-fatal: degrade to Rollouts-off
+	// rather than break Deployment/StatefulSet handling.
+	var dynamicClient dynamic.Interface
+	if config.EnableRollouts {
+		dynamicClient, err = dynamic.NewForConfig(kubeConfig)
+		if err != nil {
+			log.Warnf("Failed to create dynamic client; Argo Rollout support disabled: %v", err)
+			dynamicClient = nil
+		}
+	}
+
 	controller := NewPDBController(
 		config.Interval,
 		client,
+		dynamicClient,
 		config.PDBNameSuffix,
 		config.NonReadyTTL,
 		config.ParentResourceHash,

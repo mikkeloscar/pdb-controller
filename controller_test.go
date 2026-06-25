@@ -498,6 +498,7 @@ func TestController(tt *testing.T) {
 				controller := NewPDBController(
 					0,
 					setupMockKubernetes(t, pdbs, deployments, statefulSets, namespaces),
+					nil, // dynamic client: Argo Rollout support off for these cases
 					"pdb-controller",
 					time.Hour,
 					parentResourceHash,

@@ -10,8 +10,13 @@ import (
 	v1 "k8s.io/api/core/v1"
 	pv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 )
@@ -26,12 +31,22 @@ const (
 
 var (
 	ownerLabels = map[string]string{heritageLabel: pdbController}
+
+	// rolloutGVR is the argoproj.io/v1alpha1 Rollout resource. Argo Rollouts is
+	// optional, so this is queried via the dynamic client and a missing CRD is
+	// handled gracefully (see listRollouts).
+	rolloutGVR = schema.GroupVersionResource{
+		Group:    "argoproj.io",
+		Version:  "v1alpha1",
+		Resource: "rollouts",
+	}
 )
 
-// PDBController creates PodDisruptionBudgets for deployments and StatefulSets
-// if missing.
+// PDBController creates PodDisruptionBudgets for Deployments, StatefulSets and
+// (when the CRD is installed) Argo Rollouts if missing.
 type PDBController struct {
 	kubernetes.Interface
+	dynamicClient      dynamic.Interface
 	interval           time.Duration
 	pdbNameSuffix      string
 	nonReadyTTL        time.Duration
@@ -40,9 +55,13 @@ type PDBController struct {
 }
 
 // NewPDBController initializes a new PDBController.
-func NewPDBController(interval time.Duration, client kubernetes.Interface, pdbNameSuffix string, nonReadyTTL time.Duration, parentResourceHash bool, maxUnavailable intstr.IntOrString) *PDBController {
+//
+// dynamicClient is used to discover Argo Rollouts. It may be nil, in which case
+// Rollouts are skipped entirely.
+func NewPDBController(interval time.Duration, client kubernetes.Interface, dynamicClient dynamic.Interface, pdbNameSuffix string, nonReadyTTL time.Duration, parentResourceHash bool, maxUnavailable intstr.IntOrString) *PDBController {
 	return &PDBController{
 		Interface:          client,
+		dynamicClient:      dynamicClient,
 		interval:           interval,
 		pdbNameSuffix:      pdbNameSuffix,
 		nonReadyTTL:        nonReadyTTL,
@@ -89,7 +108,12 @@ func (n *PDBController) runOnce(ctx context.Context) error {
 		return err
 	}
 
-	resources := make([]kubeResource, 0, len(deployments.Items)+len(statefulSets.Items))
+	// Argo Rollouts is opt-in and optional; this is empty (never errors) when
+	// support is disabled or the CRD isn't installed. It deliberately cannot
+	// break the Deployment/StatefulSet handling above.
+	rollouts := n.listRollouts(ctx)
+
+	resources := make([]kubeResource, 0, len(deployments.Items)+len(statefulSets.Items)+len(rollouts))
 
 	for _, d := range deployments.Items {
 		// manually set Kind and APIVersion because of a bug in
@@ -109,9 +133,61 @@ func (n *PDBController) runOnce(ctx context.Context) error {
 		resources = append(resources, statefulSet{s})
 	}
 
+	for _, r := range rollouts {
+		resources = append(resources, r)
+	}
+
 	desiredPDBs := n.generateDesiredPDBs(resources, managedPDBs, unmanagedPDBs)
 	n.reconcilePDBs(ctx, desiredPDBs, managedPDBs)
 	return nil
+}
+
+// listRollouts returns all Argo Rollouts as kubeResources. Argo Rollouts support
+// is opt-in (--enable-rollouts); when disabled the dynamic client is nil and this
+// is a no-op. It NEVER returns an error: rollout discovery must not be able to
+// break the existing Deployment/StatefulSet reconciliation, so every failure mode
+// is logged and treated as "no rollouts this round":
+//
+//   - CRD not installed (NotFound / no matching kind): expected, debug-logged.
+//   - RBAC not granted (Forbidden): e.g. enabled without updating the ClusterRole;
+//     warn so it's visible, but keep going.
+//   - anything else (transient API errors): error-logged, retried next loop.
+//
+// The CRD is re-checked every loop, so installing Argo Rollouts (or fixing RBAC)
+// later is picked up without a restart.
+func (n *PDBController) listRollouts(ctx context.Context) []kubeResource {
+	if n.dynamicClient == nil {
+		return nil
+	}
+
+	list, err := n.dynamicClient.Resource(rolloutGVR).Namespace(v1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		switch {
+		case apierrors.IsNotFound(err) || meta.IsNoMatchError(err):
+			log.Debug("Argo Rollouts CRD not installed; skipping Rollouts")
+		case apierrors.IsForbidden(err):
+			log.Warnf("Not permitted to list Rollouts; skipping (add rollouts.argoproj.io to the ClusterRole to enable): %v", err)
+		default:
+			log.Errorf("Failed to list Rollouts; skipping this round: %v", err)
+		}
+		return nil
+	}
+
+	resources := make([]kubeResource, 0, len(list.Items))
+	for i := range list.Items {
+		var r argoRollout
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(list.Items[i].Object, &r); err != nil {
+			log.Errorf("Failed to decode Rollout; skipping it: %v", err)
+			continue
+		}
+		// Kind/APIVersion are needed for the PDB's ownerReference; set them
+		// explicitly rather than trusting the list payload.
+		r.Kind = "Rollout"
+		r.APIVersion = rolloutGVR.GroupVersion().String()
+		resources = append(resources, rollout{r})
+	}
+
+	return resources
 }
 
 func (n *PDBController) generateDesiredPDBs(resources []kubeResource, managedPDBs, unmanagedPDBs map[string]pv1.PodDisruptionBudget) map[string]pv1.PodDisruptionBudget {

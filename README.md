@@ -46,6 +46,21 @@ way to ensure broken deployments doesn't block cluster operations.
 This global value can also be overriden by specifying the annotation
 `pdb-controller.zalando.org/non-ready-ttl` on a deployment or statefulset.
 
+## Argo Rollouts
+
+Passing `--enable-rollouts` makes the controller also manage default PDBs for
+[Argo Rollouts][argo-rollouts] (`argoproj.io/v1alpha1`), treating them exactly
+like Deployments/StatefulSets (same replica and selector rules).
+
+It is **opt-in and safe**: when the flag is unset the controller behaves
+exactly as before and makes no extra API calls. When it is set but the Rollout
+CRD isn't installed — or the RBAC in [docs/rbac.yaml](docs/rbac.yaml) hasn't
+been extended with `rollouts.argoproj.io` — Rollouts are simply skipped and
+Deployment/StatefulSet handling is never affected. The CRD is re-checked every
+loop, so installing Argo Rollouts later is picked up without a restart.
+
+[argo-rollouts]: https://argoproj.github.io/rollouts/
+
 ## Building
 
 This project uses [Go modules](https://github.com/golang/go/wiki/Modules) as

@@ -1,6 +1,6 @@
 module github.com/mikkeloscar/pdb-controller
 
-go 1.26.7
+go 1.27
 
 require (
 	github.com/alecthomas/kingpin/v2 v2.4.0
